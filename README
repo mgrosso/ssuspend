@@ -1,0 +1,38 @@
+ssuspend version 0.1.0
+
+ssuspend is a small c program that locks /sys/power/state, removes zero or more
+kernel modules, echoes a suspend mode into /sys/power/state, and then sleeps 30
+or so seconds before unlocking that file.  Because it will not wait for the
+lock but exit immediately if it cant acquire that lock exclusively, it is safe
+to use from window managers where a keyboard shortcut keypress held down too
+long or some other race condition might lead to the program being called
+multiple times quickly in succession.  Because it is a small program written 
+carefully in c, it is fairly safe to make setuid or add to /etc/sudoers.
+
+Each command line argument is currently interpreted as a module to remove and
+restore.  subsequent versions will make all strings and numeric constants 
+configurable, and add syslogging.
+
+
+INSTALLATION
+============
+
+ssuspend uses GNU autoconf, so it is configured and built
+with the standard sequence:
+
+	./configure
+	make
+
+To install type "make install" or simply copy the executable
+"src/ssuspend" to a suitable directory.
+
+I personally use this with fvwm using the following lines...
+
+AddToFunc Suspend       "I" Exec exec sudo /usr/local/sbin/ssuspend
+
+and 
+
+Key End     A   MC  Suspend
+
+so that the laptop sleeps whenever alt-control-end is pressed.
+

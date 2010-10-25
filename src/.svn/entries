@@ -1,0 +1,40 @@
+8
+
+dir
+5
+file:///home/mgrosso/data/svn-ssuspend/trunk/src
+file:///home/mgrosso/data/svn-ssuspend
+
+
+
+2008-02-03T02:09:37.126243Z
+5
+mgrosso
+
+
+svn:special svn:externals svn:needs-lock
+
+ssuspend.c
+file
+
+
+
+
+2008-02-03T01:03:51.000000Z
+0e6e3dbe898272b304f4765eb6e33328
+2008-02-03T02:09:37.126243Z
+5
+mgrosso
+
+Makefile.am
+file
+
+
+
+
+2008-02-02T13:32:42.000000Z
+85cae1bda9947ced30953447fd59f8d4
+2008-02-03T02:09:37.126243Z
+5
+mgrosso
+

@@ -1,0 +1,226 @@
+/*
+** ----------------------------------------------------------------------
+** ----------------------------------------------------------------------
+**
+** File:      ssuspend.c
+** Author:    mgrosso 
+** Created:   Sat Feb  2 05:34:02 PST 2008 on caliban
+** Project:   ssuspend
+** Purpose:   atomically suspend a linux laptop. 
+** 
+** $Id$
+** ----------------------------------------------------------------------
+** ----------------------------------------------------------------------
+*/
+
+// suspending linux is as simple as "echo disk >/sys/power/state"
+//
+// except
+//
+// only root can do this, so you right a setuid shell script, which is a
+// bit evil
+//
+// and then you discover that you need to remove and restore some 
+// modules that dont behave so your shell script gets more complicated
+//
+// and then you realize that sometimes your keystroke shortcut that runs
+// the shell script is sometimes running the shellscript more than once
+// so laptop starts to wake up and then goes right back to sleep. 
+//
+// this program was finally motivated by the last issue.
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/file.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+static pid_t child_pid;
+static int   child_exit;
+
+static char  * grepmod_args[6] = { "grep","-w","-q",NULL,"/proc/modules",NULL };
+#define GREPMOD_ARG 3
+
+static char  * rmmod_args[3] = { "rmmod",NULL,NULL };
+#define RMMOD_ARG 1
+
+static char  * modprobe_args[3] = { "modprobe",NULL,NULL };
+#define MODPROBE_ARG 1
+
+typedef struct node_struct {
+    struct node_struct *next;
+    char  *data;
+} node_t;
+
+static node_t *head=NULL;
+
+static int power_state_fd=-1;
+#define POWER_STATE_PATH "/sys/power/state"
+char *power_state_path=POWER_STATE_PATH ;
+#define STATE_WORD "disk"
+char *state_word=STATE_WORD ;
+
+static void puke(const char *message){
+    perror(message);
+    exit(1);
+}
+
+static void warnif(int ret, const char *message){
+    if( ret != 0 ){
+        perror(message);
+    }
+}
+
+static void pukeif(int ret, const char *message){
+    if( ret != 0 ){
+        puke(message);
+    }
+}
+
+static void push( char *s ){
+    node_t *n=(node_t *)malloc(sizeof(node_t));
+    if(!n){
+        puke("cant malloc");
+    }
+    n->data=s;
+    if(head==NULL){
+        n->next=NULL;
+        head =n;
+    }else{
+        n->next=head;
+        head=n;
+    }
+}
+
+static char * pop(){
+    if(head==NULL){
+        return NULL;
+    }
+    char *giveback=head->data;
+    node_t *oldhead=head;
+    head=head->next;
+    free(oldhead);
+    return giveback;
+}
+
+
+static int get_exit_status(pid_t pid){
+    int eintr_count;
+    int ret;
+    int flags=0;
+    int status=-1;
+    for( eintr_count=10;
+        eintr_count && 
+            ( -1 == ( ret = waitpid( pid, &status, flags ))) && 
+            errno == EINTR ;
+        --eintr_count ){
+        ;//noop
+    }
+    if(!eintr_count){
+        puke("could not get exit status, too many EINTR");
+    }
+    if(ret==0){
+        puke("could not get exit status, process not dead yet even though flags said to wait");
+    }
+    if(ret==-1){
+        if(child_pid==pid){
+            return child_exit;
+        }
+        puke("could not get exit status");
+    }
+    if(ret==pid){
+        return status;
+    }
+    return ret;
+}
+
+static int fork_exec_wait(const char *command, char *const args[]){
+    int giveback=1;
+    pid_t pid=fork();
+    if(pid==-1){
+        puke("cant fork");
+    }
+    else if( pid==0){
+        execvp(command,args);
+        puke("execlp did not exec.");
+    }
+    else{
+        giveback=get_exit_status(pid);
+    }
+    return giveback;
+}
+
+static int fork_exec_wait_arg(const char *command, char * args[], int argsub, char *arg ){
+    args[argsub]=arg;
+    return fork_exec_wait(command,args);
+}
+
+static void pushif(char *s ){
+    int ret=fork_exec_wait_arg("grep", grepmod_args,GREPMOD_ARG,s);
+    if(ret==0){
+        warnif(fork_exec_wait_arg("rmmod", rmmod_args, RMMOD_ARG, s ),"rmmod");
+        push(s);
+    }
+}
+
+static void remove_modules(int argc, char **argv ){
+    int mod=1;
+    for(mod=1; mod < argc; ++mod){
+        pushif(argv[mod]);
+    }
+}
+
+static void addback_modules(){
+    char *s=NULL;
+    while((s=pop())){
+        warnif(fork_exec_wait_arg("modprobe", modprobe_args,MODPROBE_ARG,s),s);
+    }
+}
+
+static void lock_file(){
+    //power_state_fd=open(power_state_path, O_TRUNC | O_SYNC | O_NOFOLLOW | O_WRONLY );
+    power_state_fd=open(power_state_path, O_TRUNC | O_SYNC | O_WRONLY );
+    if(power_state_fd == -1 ){
+        puke("could not open state file, default /sys/power/state, for writing");
+    }
+    pukeif(flock(power_state_fd,LOCK_EX|LOCK_NB ),"could not lock /sys/power/state exclusively");
+}
+
+static void write_file(){
+    ssize_t written;
+    size_t  count=strlen(state_word);
+    //this will put us to sleep.
+    written=write(power_state_fd,(void *)state_word,count);
+    if(written!=count){
+        if(written==-1){
+            puke("write to /sys/power/state failed.");
+        }else if(written<count){
+            puke("could not write the entire word 'disk' to /sys/power/state in one shot.  bit odd that.");
+        }else if(written>count){
+            puke("wrote too many characters trying to write 'disk' to /sys/power/state.  bit odd that.");
+        }
+    }
+    //waking up now.
+}
+
+static void close_file(){
+    //strictly speaking this isnt needed as _exit() will do it for us after 
+    //returning from main().  however
+    warnif(close(power_state_fd), "problem closing /sys/power/state");
+}
+
+int main(int argc, char **argv ){
+    lock_file();
+    remove_modules(argc, argv );
+    write_file();
+    addback_modules();
+    warnif(sleep(30), "sleep was interrupted");
+    close_file();
+    return 0;
+}
+
