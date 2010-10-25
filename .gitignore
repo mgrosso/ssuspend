@@ -1,0 +1,7 @@
+tmp/**/*
+*.swp
+src/*.swp
+*.swo
+*.o
+configure
+**/Makefile
