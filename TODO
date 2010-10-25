@@ -1,2 +1,5 @@
-* use syslog
-* use stdargs and be configurable.
+= TODO list =
+  * [*] use getopt and be configurable.
+  * [ ] use syslog
+  * [ ] allow verbose output 
+  * [ ] implement -x to auto lock the screen
