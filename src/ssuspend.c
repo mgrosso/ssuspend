@@ -1,4 +1,4 @@
-o*
+/*
 ** ----------------------------------------------------------------------
 ** ----------------------------------------------------------------------
 **
@@ -46,9 +46,10 @@ static pid_t child_pid;
 static int   child_exit;
 
 static int argc_start=1;
-static char *short_options = "f:s:t:lv";
+static char *short_options = "f:s:t:xlv";
 static int verbose=0;
 static int syslog=0;
+static int do_lockx=0;
 #define POWER_STATE_PATH "/sys/power/state"
 char *power_state_path=POWER_STATE_PATH ;
 #define STATE_WORD "disk"
@@ -60,8 +61,11 @@ static struct option long_options [] = {
     { "time",1,NULL,'t'},
     { "syslog",0,&syslog,1},
     { "verbose",0,&verbose,1},
+    { "lock-x",0,&do_lockx,1},
     {0,0,0,0}
 };
+
+static char *lockx_args[3] = { "xscreensaver-command", "-lock",NULL };
 
 static char  * grepmod_args[6] = { "grep","-w","-q",NULL,"/proc/modules",NULL };
 #define GREPMOD_ARG 3
@@ -181,6 +185,12 @@ static int fork_exec_wait_arg(const char *command, char * args[], int argsub, ch
     return fork_exec_wait(command,args);
 }
 
+static void lock_x_if(){
+    if(do_lockx){
+        pukeif(fork_exec_wait("xscreensaver-command",lockx_args),"could not lock screen");
+    }
+}
+
 static void pushif(char *s ){
     int ret=fork_exec_wait_arg("grep", grepmod_args,GREPMOD_ARG,s);
     if(ret==0){
@@ -246,9 +256,9 @@ static void usage(){
 "    -t  <seconds> or --time <seconds>   how many seconds to sleep after resume while holding the lock.\n"
 "        This option defaults to 30 in order to prevent extra keypress events from causing double \n"
 "        suspends where your laptop resumes only to suspend again immediately.\n"
-"    -x  or --xscreensaver               tells ssuspend to lock the screen before suspending\n"
-"    -l  or --syslog                     tells ssuspend to write status information to syslog(3).\n"
-"    -v  or --verbose                    tells ssuspend to write status information to standard error.\n"
+"    -x  or --lock-x                     tells ssuspend to lock the screen before suspending\n"
+"    -l  or --syslog                     TODO: tells ssuspend to write status information to syslog(3).\n"
+"    -v  or --verbose                    TODO: tells ssuspend to write status information to standard error.\n"
 "        its ok to have both syslog and verbose turned on. \n"
    );
     exit(1);
@@ -283,6 +293,9 @@ static void handle_options( int argc, char **argv ){
         case 't':
             seconds=atoi(optarg);
             break;
+        case 'x':
+            do_lockx=1;
+            break;
         case 'l':
             syslog=1;
             break;
@@ -297,6 +310,7 @@ static void handle_options( int argc, char **argv ){
 
 int main(int argc, char **argv ){
     handle_options(argc, argv );
+    lock_x_if();
     lock_file();
     remove_modules(argc, argv );
     write_file();
