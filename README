@@ -45,78 +45,71 @@ so that the laptop sleeps whenever alt-control-end is pressed.
 I also use the following /etc/acpi/default.sh which will suspend the computer
 whenever I hit the power button or the battery gets too low.
 
+this is also in doc/default.sh. I would read it before copying it to /etc/acpi/default.sh 
+to make sure you dont lose some other functionality specific to your own distribution
+that isn't in this one.
+
 {{{
 #!/bin/sh
 # /etc/acpi/default.sh
 # Default acpi script that takes an entry for all actions
-
+ 
 set $*
-
+ 
 group=${1%%/*}
 action=${1#*/}
 device=$2
 id=$3
 value=$4
-
+ 
 #minimum milliamp hours remaining:
 MIN_MAH=100
 SUSPEND=/usr/local/sbin/ssuspend 
 BAT_STATE_FILE=/proc/acpi/battery/BAT0/state
-
-
+ 
+logger "ACPI default.sh: group=$group action=$action device=$device id=$id  value=$value  full=$*"
+ 
 log_unhandled() {
-	logger "ACPI this event unhandled: $*"
+    logger "ACPI this event unhandled: $*"
 }
-
+ 
 sleepnow(){
-    #$SUSPEND -x iwl3945
-    #dont use -x here since we dont want ssuspend to fail if 
-    #xscreensaver daemon is not running.
-    $SUSPEND iwl3945
+    logger "ACPI default.sh sleepnow(): group=$group action=$action device=$device id=$id  value=$value  full=$*"
+    $SUSPEND -X iwl3945
+    exit $?
 }
+ 
+if [ x$group == xbutton ] ; then
+    logger "ACPI default.sh group == button"
+    if [ x$action == xpower ] ; then
+        logger "ACPI default.sh button/power"
+        sleepnow 
+    fi  
+    if [ x$action == xlid ] ; then
+        logger "ACPI default.sh button/lid"
+        xset dpms force off 
+        exit $?
+    fi  
+fi
+if [ x$group == xbattery ] ; then
+    logger "ACPI default.sh group == battery"
+    if [ x$action == xbattery ] ; then
+        MAH=$( cat $BAT_STATE_FILE |\
+                /bin/grep ^remaining|\
+                gawk '{print $3 }') 
+        if [ $MAH -ge $MIN_MAH ] ; then 
+             logger ACPI BAT0 ok, $MAH mah remaining
+             exit
+        else
+             logger ACPI BAT0 dead. use $MAH mah to suspend
+             sleepnow 
+        fi
+    fi  
+fi
+log_unhandled $*  
+exit 
 
-case "$group" in
-	button) case "$action" in
-			power) sleepnow ;;
-			lid) xset dpms force off ;;
-			*)	log_unhandled $* ;;
-		esac
-        ;;
-	ac_adapter)
-		case "$value" in
-			# Add code here to handle when the system is unplugged
-			# (maybe change cpu scaling to powersave mode).  For
-			# multicore systems, make sure you set powersave mode
-			# for each core!
-			#*0)
-			#	cpufreq-set -g powersave
-			#	;;
 
-			# Add code here to handle when the system is plugged in
-			# (maybe change cpu scaling to performance mode).  For
-			# multicore systems, make sure you set performance mode
-			# for each core!
-			#*1)
-			#	cpufreq-set -g performance
-			#	;;
-			*)	log_unhandled $* ;;
-    battery)
-        case "$value" in 
-            BAT0) 
-                MAH=$( cat $BAT_STATE_FILE |\
-                        /bin/grep ^remaining|\
-                        gawk '{print $3 }') 
-                if [ $MAH -ge $MIN_MAH ] ; then 
-                     logger ACPI BAT0 ok, $MAH mah remaining
-                else
-                     logger ACPI BAT0 dead. use $MAH mah to suspend
-                     sleepnow 
-                fi
-                ;;
-		esac
-		;;
-	*)	log_unhandled $* ;;
-esac
 }}}
 
 
