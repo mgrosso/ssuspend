@@ -1,7 +1,13 @@
 tmp/**/*
-*.swp
-src/*.swp
-*.swo
 *.o
 configure
 **/Makefile
+Makefile
+src/ssuspend
+.config.env
+config.status
+config.log
+*.swp
+*.swo
+src/*.swp.grrr-why-not-work?
+src/.ssuspend.c.swp
