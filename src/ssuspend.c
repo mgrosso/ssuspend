@@ -46,10 +46,11 @@ static pid_t child_pid;
 static int   child_exit;
 
 static int argc_start=1;
-static char *short_options = "f:s:t:xlv";
+static char *short_options = "f:s:t:xXlvh?";
 static int verbose=0;
 static int syslog=0;
 static int do_lockx=0;
+static int do_lockx_nofail=0;
 #define POWER_STATE_PATH "/sys/power/state"
 char *power_state_path=POWER_STATE_PATH ;
 #define STATE_WORD "disk"
@@ -62,6 +63,8 @@ static struct option long_options [] = {
     { "syslog",0,&syslog,1},
     { "verbose",0,&verbose,1},
     { "lock-x",0,&do_lockx,1},
+    { "lock-x-nofail",0,&do_lockx_nofail,1},
+    { "help",0,0,0},
     {0,0,0,0}
 };
 
@@ -185,9 +188,11 @@ static int fork_exec_wait_arg(const char *command, char * args[], int argsub, ch
     return fork_exec_wait(command,args);
 }
 
-static void lock_x_if(){
+static void lock_x(){
     if(do_lockx){
         pukeif(fork_exec_wait("xscreensaver-command",lockx_args),"could not lock screen");
+    }else if(do_lockx_nofail){
+        fork_exec_wait("xscreensaver-command",lockx_args);
     }
 }
 
@@ -248,18 +253,26 @@ static void close_file(){
 
 static void usage(){
     fprintf(stderr,"ssuspend [options] [module [ module ... ] ]\n"
+"\n"
+"version 1.0.0\n"
+"\n"
 "   each module argument found in /proc/modules is removed in order on the way down, and restored \n"
 "       in reverse order on the way back up.\n"
+"\n"
 "   options are as follows:"
+"    -h  or -? or --help                 get this message\n"
 "    -f  <file> or --file <file>         where to write the new state. defaults to /sys/power/state.\n"
 "    -s  <state> or --state <state>      what state to write to the control file. defaults to 'disk'.\n"
 "    -t  <seconds> or --time <seconds>   how many seconds to sleep after resume while holding the lock.\n"
-"        This option defaults to 30 in order to prevent extra keypress events from causing double \n"
-"        suspends where your laptop resumes only to suspend again immediately.\n"
+"                                        This option defaults to 30 in order to prevent extra keypress\n"
+"                                        events from causing double suspends where your laptop resumes\n"
+"                                        only to suspend again immediately.\n"
 "    -x  or --lock-x                     tells ssuspend to lock the screen before suspending\n"
+"    -X  or --lock-x-nofail              tells ssuspend to lock the screen before suspending if possible\n"
+"                                        but continue in any case\n"
 "    -l  or --syslog                     TODO: tells ssuspend to write status information to syslog(3).\n"
 "    -v  or --verbose                    TODO: tells ssuspend to write status information to standard error.\n"
-"        its ok to have both syslog and verbose turned on. \n"
+"\n"
    );
     exit(1);
 }
@@ -296,12 +309,17 @@ static void handle_options( int argc, char **argv ){
         case 'x':
             do_lockx=1;
             break;
+        case 'X':
+            do_lockx_nofail=1;
+            break;
         case 'l':
             syslog=1;
             break;
         case 'v':
             verbose=1;
             break;
+        case 'h':
+        case '?':
         default:
             usage();
         }
@@ -310,7 +328,7 @@ static void handle_options( int argc, char **argv ){
 
 int main(int argc, char **argv ){
     handle_options(argc, argv );
-    lock_x_if();
+    lock_x();
     lock_file();
     remove_modules(argc, argv );
     write_file();
