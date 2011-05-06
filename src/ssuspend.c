@@ -69,16 +69,25 @@ static struct option long_options [] = {
 };
 
 static char *lockx_args[3] = { "xscreensaver-command", "-lock",NULL };
+static const char *lockx = lockx_args[0] ;
 
 static char  * grepmod_args[6] = { "grep","-w","-q",NULL,"/proc/modules",NULL };
+static char *grep = grepmod_args[0] ;
 #define GREPMOD_ARG 3
 
-static char  * rmmod_args[3] = { "rmmod",NULL,NULL };
+static char  * rmmod_args[3] = { "/sbin/rmmod",NULL,NULL };
+static const char * rmmod = rmmod_args[0] ;
 #define RMMOD_ARG 1
 
-static char  * modprobe_args[3] = { "modprobe",NULL,NULL };
+static char  * modprobe_args[3] = { "/sbin/modprobe",NULL,NULL };
+static const char * modprobe = modprobe_args[0] ;
 #define MODPROBE_ARG 1
 
+//TODO: check /proc/meminfo to see if we are likely to have enough room to suspend. 
+//no gaurantees, but if MemTotal-Buffers-Cache <  SwapFree * 0.8 we should be ok.
+//read the file and parse.
+//"egrep","MemTotal|Buffers|Cached|SwapTotal|SwapFree", "/proc/meminfo" 
+ 
 typedef struct node_struct {
     struct node_struct *next;
     char  *data;
@@ -175,7 +184,7 @@ static int fork_exec_wait(const char *command, char *const args[]){
     }
     else if( pid==0){
         execvp(command,args);
-        puke("execlp did not exec.");
+        puke(command);
     }
     else{
         giveback=get_exit_status(pid);
@@ -190,16 +199,16 @@ static int fork_exec_wait_arg(const char *command, char * args[], int argsub, ch
 
 static void lock_x(){
     if(do_lockx){
-        pukeif(fork_exec_wait("xscreensaver-command",lockx_args),"could not lock screen");
+        pukeif(fork_exec_wait(lockx,lockx_args),lockx);
     }else if(do_lockx_nofail){
-        fork_exec_wait("xscreensaver-command",lockx_args);
+        fork_exec_wait(lockx,lockx_args);
     }
 }
 
 static void pushif(char *s ){
-    int ret=fork_exec_wait_arg("grep", grepmod_args,GREPMOD_ARG,s);
+    int ret=fork_exec_wait_arg(grep, grepmod_args,GREPMOD_ARG,s);
     if(ret==0){
-        pukeif(fork_exec_wait_arg("rmmod", rmmod_args, RMMOD_ARG, s ),"could not execute rmmod");
+        pukeif(fork_exec_wait_arg(rmmod, rmmod_args, RMMOD_ARG, s ),rmmod);
         push(s);
     }
 }
@@ -214,7 +223,7 @@ static void remove_modules(int argc, char **argv ){
 static void addback_modules(){
     char *s=NULL;
     while((s=pop())){
-        warnif(fork_exec_wait_arg("modprobe", modprobe_args,MODPROBE_ARG,s),s);
+        warnif(fork_exec_wait_arg(modprobe, modprobe_args,MODPROBE_ARG,s),s);
     }
 }
 
@@ -236,13 +245,14 @@ static void write_file(){
     //or the call failed in which case we never went to sleep.
     if(written!=count){
         if(written==-1){
-            puke("write to /sys/power/state failed.");
+            puke("write to /sys/power/state or its alternate failed.");
         }else if(written<count){
-            puke("could not write the entire word 'disk' to /sys/power/state in one shot.  bit odd that.");
+            puke("could not write the entire word 'disk' to /sys/power/state or its alternate in one shot.  bit odd that.");
         }else if(written>count){
             puke("wrote too many characters trying to write 'disk' to /sys/power/state.  bit odd that.");
         }
     }
+    //warnif(fdatasync(power_state_fd),"could not fdatasync() /sys/power/state or its alternate.");
 }
 
 static void close_file(){
