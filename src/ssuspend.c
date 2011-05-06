@@ -256,9 +256,9 @@ static void write_file(){
 }
 
 static void close_file(){
-    //strictly speaking this isnt needed as _exit() will do it for us after 
-    //returning from main().  however
-    warnif(close(power_state_fd), "problem closing /sys/power/state");
+    //NOTE: strictly speaking this isnt needed as _exit() will do it for us after 
+    //NOTE: stubbing as doing it caused problems.
+    //warnif(close(power_state_fd), "problem closing /sys/power/state");
 }
 
 static void usage(){
