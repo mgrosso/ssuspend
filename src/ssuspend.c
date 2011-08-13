@@ -68,19 +68,23 @@ static struct option long_options [] = {
     {0,0,0,0}
 };
 
-static char *lockx_args[3] = { "xscreensaver-command", "-lock",NULL };
-static const char *lockx = lockx_args[0] ;
+#define LOCKX "xscreensaver-command"
+static char *lockx_args[3] = { LOCKX, "-lock",NULL };
+static const char *lockx = LOCKX ;
 
-static char  * grepmod_args[6] = { "grep","-w","-q",NULL,"/proc/modules",NULL };
-static char *grep = grepmod_args[0] ;
+#define GREP "grep"
+static char  * grepmod_args[6] = { GREP,"-w","-q",NULL,"/proc/modules",NULL };
+static const char *grep = GREP ;
 #define GREPMOD_ARG 3
 
-static char  * rmmod_args[3] = { "/sbin/rmmod",NULL,NULL };
-static const char * rmmod = rmmod_args[0] ;
+#define RMMOD "/sbin/rmmod"
+static char  * rmmod_args[3] = { RMMOD,NULL,NULL };
+static const char * rmmod = RMMOD ;
 #define RMMOD_ARG 1
 
-static char  * modprobe_args[3] = { "/sbin/modprobe",NULL,NULL };
-static const char * modprobe = modprobe_args[0] ;
+#define MODPROBE "/sbin/modprobe"
+static char  * modprobe_args[3] = { MODPROBE,NULL,NULL };
+static const char * modprobe = MODPROBE ;
 #define MODPROBE_ARG 1
 
 //TODO: check /proc/meminfo to see if we are likely to have enough room to suspend. 
