@@ -42,24 +42,31 @@
 #include <string.h>
 #include <getopt.h>
 
+#include <sys/swap.h>
+
 static pid_t child_pid;
 static int   child_exit;
 
 static int argc_start=1;
-static char *short_options = "f:s:t:xXlvh?";
+static char *short_options = "f:s:t:d:DxXlvh?";
 static int verbose=0;
 static int syslog=0;
+static int dryrun=0;
 static int do_lockx=0;
 static int do_lockx_nofail=0;
 #define POWER_STATE_PATH "/sys/power/state"
 char *power_state_path=POWER_STATE_PATH ;
 #define STATE_WORD "disk"
 char *state_word=STATE_WORD ;
+char *device_path=NULL ;
 static int seconds = 30;
+const char *argvzero = NULL;
 static struct option long_options [] = {
     { "file",1,NULL,'f'},
     { "state",1,NULL,'s'},
     { "time",1,NULL,'t'},
+    { "device",1,NULL,'d'},
+    { "dryrun",0,&dryrun,'D'},
     { "syslog",0,&syslog,1},
     { "verbose",0,&verbose,1},
     { "lock-x",0,&do_lockx,1},
@@ -87,6 +94,17 @@ static char  * modprobe_args[3] = { MODPROBE,NULL,NULL };
 static const char * modprobe = MODPROBE ;
 #define MODPROBE_ARG 1
 
+#define DD "dd"
+static char  * dd_args[6] = { DD,"if=/dev/zero",NULL,"count=10240","bs=1024", NULL };
+static const char * dd = DD;
+#define DD_ARG 2
+
+#define MKSWAP "mkswap"
+static char  * mkswap_args[5] = { MKSWAP,"-L","ssuspend",NULL,NULL };
+static const char * mkswap = MKSWAP;
+#define MKSWAP_ARG 3
+
+
 //TODO: check /proc/meminfo to see if we are likely to have enough room to suspend. 
 //no gaurantees, but if MemTotal-Buffers-Cache <  SwapFree * 0.8 we should be ok.
 //read the file and parse.
@@ -106,10 +124,11 @@ static void puke(const char *message){
     exit(1);
 }
 
-static void warnif(int ret, const char *message){
+static int warnif(int ret, const char *message){
     if( ret != 0 ){
         perror(message);
     }
+    return ret;
 }
 
 static void pukeif(int ret, const char *message){
@@ -181,6 +200,18 @@ static int get_exit_status(pid_t pid){
 }
 
 static int fork_exec_wait(const char *command, char *const args[]){
+    if(verbose){
+        fprintf(stderr,"%s: running %s, args:", argvzero,command);
+        const char *a;
+        int i=0;
+        for( a = args[i]; a && *a; a=args[++i] ){
+            fprintf(stderr," %i=[%s]", i, a );
+        }
+        fprintf(stderr,"\n" );
+    }
+    if(dryrun){
+        return 0;
+    }
     int giveback=1;
     pid_t pid=fork();
     if(pid==-1){
@@ -232,12 +263,65 @@ static void addback_modules(){
 }
 
 static void lock_file(){
+    if(verbose){
+        fprintf(stderr,"%s: locking file (%s)\n",
+                argvzero,power_state_path);
+    }
+    if(dryrun){
+        return ;
+    }
     //power_state_fd=open(power_state_path, O_TRUNC | O_SYNC | O_NOFOLLOW | O_WRONLY );
     power_state_fd=open(power_state_path, O_TRUNC | O_SYNC | O_WRONLY );
     if(power_state_fd == -1 ){
         puke("could not open state file, default /sys/power/state, for writing");
     }
     pukeif(flock(power_state_fd,LOCK_EX|LOCK_NB ),"could not lock /sys/power/state exclusively");
+}
+
+static int do_swapoff(char *path){
+    if(verbose){
+        fprintf(stderr,"%s: calling %s(%s)\n",argvzero,"swapoff",path);
+    }
+    if(dryrun){
+        return 0;
+    }
+    return warnif(swapoff(path),"swapoff"); 
+}
+static int do_wipeswap(char *path){
+    size_t len = strlen(path) + strlen("of=") + 1;
+    char *s = malloc(len);
+    pukeif(s==NULL ? 1 : 0, "could not malloc a very small string.");
+    *s='\0';
+    sprintf(s,"of=%s",path);
+    int ret = warnif(fork_exec_wait_arg(dd, dd_args, DD_ARG, s),dd);
+    free(s);
+    return ret;
+}
+static int do_mkswap(char *path){
+    return warnif(fork_exec_wait_arg(mkswap, mkswap_args,MKSWAP_ARG,path),mkswap);
+}
+static int do_swapon(char *path){ 
+    if(verbose){
+        fprintf(stderr,"%s: calling %s(%s)\n",argvzero,"swapon",path);
+    }
+    if(dryrun){
+        return 0;
+    }
+    return warnif(swapon(path,0),"swapon"); 
+}
+
+static int clean_image_from_device(){
+    if(!device_path){
+        return 0;
+    }
+    int ret = (     
+            (do_swapoff(device_path)) || 
+            (do_wipeswap(device_path)) ||
+            (do_mkswap(device_path)) ||
+            (do_swapon(device_path)) 
+    );
+    warnif(ret, "problem with wiping the swap device.");
+    return ret;
 }
 
 static void write_file(){
@@ -266,7 +350,7 @@ static void close_file(){
 }
 
 static void usage(){
-    fprintf(stderr,"ssuspend [options] [module [ module ... ] ]\n"
+    fprintf(stderr,"%s [options] [module [ module ... ] ]\n"
 "\n"
 "version 1.0.0\n"
 "\n"
@@ -278,6 +362,7 @@ static void usage(){
 "    -f  <file> or --file <file>         where to write the new state. defaults to /sys/power/state.\n"
 "    -s  <state> or --state <state>      what state to write to the control file. defaults to 'disk'.\n"
 "    -t  <seconds> or --time <seconds>   how many seconds to sleep after resume while holding the lock.\n"
+"    -d  <device> or --device <device>   an optional swap device to wipe clean of stale suspend images after waking up.\n"
 "                                        This option defaults to 30 in order to prevent extra keypress\n"
 "                                        events from causing double suspends where your laptop resumes\n"
 "                                        only to suspend again immediately.\n"
@@ -285,8 +370,9 @@ static void usage(){
 "    -X  or --lock-x-nofail              tells ssuspend to lock the screen before suspending if possible\n"
 "                                        but continue in any case\n"
 "    -l  or --syslog                     TODO: tells ssuspend to write status information to syslog(3).\n"
-"    -v  or --verbose                    TODO: tells ssuspend to write status information to standard error.\n"
-"\n"
+"    -v  or --verbose                    tells ssuspend to write status information to standard error.\n"
+"    -D  or --dryrun                    causes ssuspend to print out what it would do to stderr. implies verbose.\n"
+"\n", argvzero
    );
     exit(1);
 }
@@ -298,6 +384,15 @@ static void strdup_option( char **dest ){
     }
 }
 
+static int do_sleep(){
+    if(verbose){
+        fprintf(stderr,"%s: sleeping for (%i)\n", argvzero,seconds);
+    }
+    if(dryrun){
+        return 0;
+    }
+    return warnif(sleep(seconds), "sleep was interrupted");
+}
 
 static void handle_options( int argc, char **argv ){
     int c;
@@ -320,6 +415,13 @@ static void handle_options( int argc, char **argv ){
         case 't':
             seconds=atoi(optarg);
             break;
+        case 'd':
+            strdup_option(&device_path);
+            break;
+        case 'D':
+            dryrun = 1;
+            verbose=1;
+            break;
         case 'x':
             do_lockx=1;
             break;
@@ -341,13 +443,17 @@ static void handle_options( int argc, char **argv ){
 }
 
 int main(int argc, char **argv ){
+    argvzero = argv[0];
     handle_options(argc, argv );
     lock_x();
     lock_file();
     remove_modules(argc, argv );
-    write_file();
+    if(!dryrun){
+        write_file();
+    }
     addback_modules();
-    warnif(sleep(seconds), "sleep was interrupted");
+    do_sleep();
+    clean_image_from_device();
     close_file();
     return 0;
 }
