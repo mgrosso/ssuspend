@@ -48,7 +48,9 @@ static pid_t child_pid;
 static int   child_exit;
 
 static int argc_start=1;
-static char *short_options = "f:s:t:d:DxXlvh?";
+static char *short_options = "baf:s:t:d:DxXlvh?";
+static int before=0;
+static int after=0;
 static int verbose=0;
 static int syslog=0;
 static int dryrun=0;
@@ -62,6 +64,8 @@ char *device_path=NULL ;
 static int seconds = 30;
 const char *argvzero = NULL;
 static struct option long_options [] = {
+    { "before",0,&before,'t'},
+    { "after",0,&after,'t'},
     { "file",1,NULL,'f'},
     { "state",1,NULL,'s'},
     { "time",1,NULL,'t'},
@@ -103,6 +107,15 @@ static const char * dd = DD;
 static char  * mkswap_args[5] = { MKSWAP,"-L","ssuspend",NULL,NULL };
 static const char * mkswap = MKSWAP;
 #define MKSWAP_ARG 3
+
+#define PRESHELL "/etc/ssuspend/before"
+static char  * preshell_args[2] = { PRESHELL,NULL };
+static const char * preshell = PRESHELL;
+#define PRESHELL_ARG 0
+#define POSTSHELL "/etc/ssuspend/after"
+static char  * postshell_args[2] = { POSTSHELL,NULL };
+static const char * postshell = POSTSHELL;
+#define POSTSHELL_ARG 0
 
 
 //TODO: check /proc/meminfo to see if we are likely to have enough room to suspend. 
@@ -359,6 +372,8 @@ static void usage(){
 "\n"
 "   options are as follows:"
 "    -h  or -? or --help                 get this message\n"
+"    -b  or --before                     runs /etc/ssuspend/before after lock but before ssuspending\n"
+"    -a  or --after                      runs /etc/ssuspend/after after resume but before releasing lock\n"
 "    -f  <file> or --file <file>         where to write the new state. defaults to /sys/power/state.\n"
 "    -s  <state> or --state <state>      what state to write to the control file. defaults to 'disk'.\n"
 "    -t  <seconds> or --time <seconds>   how many seconds to sleep after resume while holding the lock.\n"
@@ -394,6 +409,13 @@ static int do_sleep(){
     return warnif(sleep(seconds), "sleep was interrupted");
 }
 
+static void script(int opt,const char *script, char *script_args[] ){
+    if(!opt){
+        return;
+    }
+    return pukeif(fork_exec_wait(script, script_args),script);
+}
+
 static void handle_options( int argc, char **argv ){
     int c;
     while(1){
@@ -406,6 +428,12 @@ static void handle_options( int argc, char **argv ){
         case 0:
             usage();
             break;//not reached.
+        case 'b':
+            before=1;
+            break;
+        case 'a':
+            after=1;
+            break;
         case 'f':
             strdup_option(&power_state_path);
             break;
@@ -447,11 +475,13 @@ int main(int argc, char **argv ){
     handle_options(argc, argv );
     lock_x();
     lock_file();
+    script(before,preshell,preshell_args);
     remove_modules(argc, argv );
     if(!dryrun){
         write_file();
     }
     addback_modules();
+    script(after,postshell,postshell_args);
     do_sleep();
     clean_image_from_device();
     close_file();
