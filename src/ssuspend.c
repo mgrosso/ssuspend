@@ -145,12 +145,17 @@ static void opensyslog(){
     }else{
         setlogmask( LOG_EMERG );
     }
+}
 
+//TODO: remove this hack, probably after sorting syslog-ng? or did semantics of setlogmask change?
+#define LOG_LEVEL_THAT_JUST_WORKS_DAMMIT 2
+static int syslog_level(int desired){
+  return LOG_LEVEL_THAT_JUST_WORKS_DAMMIT ;
 }
 
 static void puke(const char *message){
     if(use_syslog){
-        syslog(LOG_EMERG, "exiting because of failure with: %s, errno=%i sterror=%s", message, errno, strerror(errno));
+        syslog(syslog_level(LOG_EMERG), "exiting because of failure with: %s, errno=%i sterror=%s", message, errno, strerror(errno));
     }else{
         perror(message);
     }
@@ -160,7 +165,7 @@ static void puke(const char *message){
 static int warnif(int ret, const char *message){
     if( ret != 0 ){
         if(use_syslog){
-            syslog(LOG_WARNING, "warning for: %s, errno=%i sterror=%s", message, errno, strerror(errno));
+            syslog(syslog_level(LOG_WARNING), "warning for: %s, errno=%i sterror=%s", message, errno, strerror(errno));
         }else{
             perror(message);
         }
@@ -182,7 +187,7 @@ static void verbose_log(const char *format, ...){
             fprintf(stderr, buf);
         }
         if(use_syslog){
-            syslog(LOG_INFO, buf);
+            syslog(syslog_level(LOG_INFO), buf);
         }
     }
 }
@@ -439,7 +444,7 @@ static int do_sleep(){
     if(verbose){
         fprintf(stderr,"%s: sleeping for (%i)\n", argvzero,seconds);
         if(use_syslog){
-            syslog(LOG_INFO, "%s: sleeping for (%i)\n", argvzero,seconds);
+            syslog(syslog_level(LOG_INFO), "%s: sleeping for (%i)\n", argvzero,seconds);
         }
     }
     if(dryrun){
