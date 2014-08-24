@@ -38,6 +38,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <getopt.h>
@@ -167,6 +168,25 @@ static int warnif(int ret, const char *message){
     return ret;
 }
 
+#define SSUSPEND_MAX_MESSAGE 1024
+static void verbose_log(const char *format, ...){
+    if(verbose || use_syslog){
+        char buf[SSUSPEND_MAX_MESSAGE];
+        va_list ap;
+        va_start(ap, format);
+        memset( buf, '\0', SSUSPEND_MAX_MESSAGE );
+        vsnprintf( buf, SSUSPEND_MAX_MESSAGE-1, format, ap );
+        buf[SSUSPEND_MAX_MESSAGE-1]='\0';
+        va_end( ap);
+        if(verbose){
+            fprintf(stderr, buf);
+        }
+        if(use_syslog){
+            syslog(LOG_INFO, buf);
+        }
+    }
+}
+
 static void pukeif(int ret, const char *message){
     if( ret != 0 ){
         puke(message);
@@ -236,21 +256,11 @@ static int get_exit_status(pid_t pid){
 }
 
 static int fork_exec_wait(const char *command, char *const args[]){
-    if(verbose){
-        if(use_syslog){
-            syslog(LOG_INFO,"%s: running %s", argvzero,command);
-        }else{
-            fprintf(stderr,"%s: running %s, args:", argvzero,command);
-        }
-        const char *a;
-        int i=0;
-        for( a = args[i]; a && *a; a=args[++i] ){
-            fprintf(stderr," %i=[%s]", i, a );
-            if(use_syslog){
-                syslog(LOG_DEBUG,"%s: running %s, arg %i=%s", argvzero,command,i,a);
-            }
-        }
-        fprintf(stderr,"\n" );
+    const char *a;
+    int i=0;
+    verbose_log( "%s: running %s, args:", argvzero, command);
+    for( a = args[i]; a && *a; a=args[++i] ){
+        verbose_log("%s %s arg %i=[%s]", argvzero, command, i, a );
     }
     if(dryrun){
         return 0;
@@ -306,14 +316,7 @@ static void addback_modules(){
 }
 
 static void lock_file(){
-    if(verbose){
-        fprintf(stderr,"%s: locking file (%s)\n",
-                argvzero,power_state_path);
-        if(use_syslog){
-            syslog(LOG_INFO,"%s: locking file (%s)\n",
-                argvzero,power_state_path);
-        }
-    }
+    verbose_log("%s: locking file (%s)\n", argvzero, power_state_path);
     if(dryrun){
         return ;
     }
@@ -326,17 +329,13 @@ static void lock_file(){
 }
 
 static int do_swapoff(char *path){
-    if(verbose){
-        fprintf(stderr,"%s: calling %s(%s)\n",argvzero,"swapoff",path);
-        if(use_syslog){
-            syslog(LOG_INFO, "%s: calling %s(%s)\n",argvzero,"swapoff",path);
-        }
-    }
+    verbose_log("%s: calling %s(%s)\n",argvzero,"swapoff",path);
     if(dryrun){
         return 0;
     }
     return warnif(swapoff(path),"swapoff"); 
 }
+
 static int do_wipeswap(char *path){
     size_t len = strlen(path) + strlen("of=") + 1;
     char *s = malloc(len);
@@ -347,16 +346,13 @@ static int do_wipeswap(char *path){
     free(s);
     return ret;
 }
+
 static int do_mkswap(char *path){
     return warnif(fork_exec_wait_arg(mkswap, mkswap_args,MKSWAP_ARG,path),mkswap);
 }
+
 static int do_swapon(char *path){ 
-    if(verbose){
-        fprintf(stderr,"%s: calling %s(%s)\n",argvzero,"swapon",path);
-        if(use_syslog){
-            syslog(LOG_INFO, "%s: calling %s(%s)\n",argvzero,"swapon",path);
-        }
-    }
+    verbose_log("%s: calling %s(%s)\n",argvzero,"swapon",path);
     if(dryrun){
         return 0;
     }
