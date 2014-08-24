@@ -43,6 +43,7 @@
 #include <getopt.h>
 
 #include <sys/swap.h>
+#include <syslog.h>
 
 static pid_t child_pid;
 static int   child_exit;
@@ -52,7 +53,7 @@ static char *short_options = "baf:s:t:d:DxXlvh?";
 static int before=0;
 static int after=0;
 static int verbose=0;
-static int syslog=0;
+static int use_syslog=0;
 static int dryrun=0;
 static int do_lockx=0;
 static int do_lockx_nofail=0;
@@ -71,7 +72,7 @@ static struct option long_options [] = {
     { "time",1,NULL,'t'},
     { "device",1,NULL,'d'},
     { "dryrun",0,&dryrun,'D'},
-    { "syslog",0,&syslog,1},
+    { "syslog",0,&use_syslog,'l'},
     { "verbose",0,&verbose,1},
     { "lock-x",0,&do_lockx,1},
     { "lock-x-nofail",0,&do_lockx_nofail,1},
@@ -132,14 +133,36 @@ static node_t *head=NULL;
 
 static int power_state_fd=-1;
 
+static void opensyslog(){
+    if(use_syslog){
+        openlog("ssuspend",LOG_CONS | LOG_PERROR | LOG_PID, LOG_USER );
+        if(verbose ){
+            setlogmask( LOG_EMERG | LOG_ALERT | LOG_CRIT | LOG_ERR | LOG_WARNING | LOG_NOTICE | LOG_INFO | LOG_DEBUG );
+        }else{
+            setlogmask( LOG_EMERG | LOG_ALERT | LOG_CRIT | LOG_ERR | LOG_WARNING );
+        }
+    }else{
+        setlogmask( LOG_EMERG );
+    }
+
+}
+
 static void puke(const char *message){
-    perror(message);
+    if(use_syslog){
+        syslog(LOG_EMERG, "exiting because of failure with: %s, errno=%i sterror=%s", message, errno, strerror(errno));
+    }else{
+        perror(message);
+    }
     exit(1);
 }
 
 static int warnif(int ret, const char *message){
     if( ret != 0 ){
-        perror(message);
+        if(use_syslog){
+            syslog(LOG_WARNING, "warning for: %s, errno=%i sterror=%s", message, errno, strerror(errno));
+        }else{
+            perror(message);
+        }
     }
     return ret;
 }
@@ -214,11 +237,18 @@ static int get_exit_status(pid_t pid){
 
 static int fork_exec_wait(const char *command, char *const args[]){
     if(verbose){
-        fprintf(stderr,"%s: running %s, args:", argvzero,command);
+        if(use_syslog){
+            syslog(LOG_INFO,"%s: running %s", argvzero,command);
+        }else{
+            fprintf(stderr,"%s: running %s, args:", argvzero,command);
+        }
         const char *a;
         int i=0;
         for( a = args[i]; a && *a; a=args[++i] ){
             fprintf(stderr," %i=[%s]", i, a );
+            if(use_syslog){
+                syslog(LOG_DEBUG,"%s: running %s, arg %i=%s", argvzero,command,i,a);
+            }
         }
         fprintf(stderr,"\n" );
     }
@@ -279,6 +309,10 @@ static void lock_file(){
     if(verbose){
         fprintf(stderr,"%s: locking file (%s)\n",
                 argvzero,power_state_path);
+        if(use_syslog){
+            syslog(LOG_INFO,"%s: locking file (%s)\n",
+                argvzero,power_state_path);
+        }
     }
     if(dryrun){
         return ;
@@ -294,6 +328,9 @@ static void lock_file(){
 static int do_swapoff(char *path){
     if(verbose){
         fprintf(stderr,"%s: calling %s(%s)\n",argvzero,"swapoff",path);
+        if(use_syslog){
+            syslog(LOG_INFO, "%s: calling %s(%s)\n",argvzero,"swapoff",path);
+        }
     }
     if(dryrun){
         return 0;
@@ -316,6 +353,9 @@ static int do_mkswap(char *path){
 static int do_swapon(char *path){ 
     if(verbose){
         fprintf(stderr,"%s: calling %s(%s)\n",argvzero,"swapon",path);
+        if(use_syslog){
+            syslog(LOG_INFO, "%s: calling %s(%s)\n",argvzero,"swapon",path);
+        }
     }
     if(dryrun){
         return 0;
@@ -402,6 +442,9 @@ static void strdup_option( char **dest ){
 static int do_sleep(){
     if(verbose){
         fprintf(stderr,"%s: sleeping for (%i)\n", argvzero,seconds);
+        if(use_syslog){
+            syslog(LOG_INFO, "%s: sleeping for (%i)\n", argvzero,seconds);
+        }
     }
     if(dryrun){
         return 0;
@@ -457,7 +500,7 @@ static void handle_options( int argc, char **argv ){
             do_lockx_nofail=1;
             break;
         case 'l':
-            syslog=1;
+            use_syslog=1;
             break;
         case 'v':
             verbose=1;
@@ -473,6 +516,7 @@ static void handle_options( int argc, char **argv ){
 int main(int argc, char **argv ){
     argvzero = argv[0];
     handle_options(argc, argv );
+    opensyslog();
     lock_x();
     lock_file();
     script(before,preshell,preshell_args);
