@@ -28,6 +28,9 @@
 // so laptop starts to wake up and then goes right back to sleep. 
 //
 // this program was finally motivated by the last issue.
+//
+// TODO: use /etc/ssuspend/{before|after} exclusively
+// TODO: and have them call /etc/ssuspend/{before|after}.d/*
 
 #define _GNU_SOURCE
 #include <sys/types.h>
