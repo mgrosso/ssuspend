@@ -75,21 +75,25 @@ char *disk_word=DISK_WORD ;
 char *device_path=NULL ;
 static int seconds = 30;
 const char *argvzero = NULL;
+//NOTE: every entry passes NULL for flag and its short option letter for val, so
+//getopt_long() returns that letter and handle_options() sees it in the switch
+//below.  a non-NULL flag makes getopt_long() return 0 instead, which used to
+//land on "case 0: usage()" and made these options unusable.
 static struct option long_options [] = {
-    { "before",0,&before,'t'},
-    { "after",0,&after,'t'},
+    { "before",0,NULL,'b'},
+    { "after",0,NULL,'a'},
     { "file",1,NULL,'f'},
     { "state",1,NULL,'s'},
     { "time",1,NULL,'t'},
     { "device",1,NULL,'d'},
     { "disk",0,NULL,'p'},
     { "method",1,NULL,'m'},
-    { "dryrun",0,&dryrun,'D'},
-    { "syslog",0,&use_syslog,'l'},
-    { "verbose",0,&verbose,1},
-    { "lock-x",0,&do_lockx,1},
-    { "lock-x-nofail",0,&do_lockx_nofail,1},
-    { "help",0,0,0},
+    { "dryrun",0,NULL,'D'},
+    { "syslog",0,NULL,'l'},
+    { "verbose",0,NULL,'v'},
+    { "lock-x",0,NULL,'x'},
+    { "lock-x-nofail",0,NULL,'X'},
+    { "help",0,NULL,'h'},
     {0,0,0,0}
 };
 
@@ -517,9 +521,6 @@ static void handle_options( int argc, char **argv ){
             break;
         }
         switch(c){
-        case 0:
-            usage();
-            break;//not reached.
         case 'b':
             before=1;
             break;
