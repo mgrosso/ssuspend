@@ -53,7 +53,7 @@ static pid_t child_pid;
 static int   child_exit;
 
 static int argc_start=1;
-static char *short_options = "baf:s:t:d:DxXlvh?";
+static char *short_options = "baf:s:t:d:pm:DxXlvh?";
 static int before=0;
 static int after=0;
 static int verbose=0;
@@ -61,10 +61,17 @@ static int use_syslog=0;
 static int dryrun=0;
 static int do_lockx=0;
 static int do_lockx_nofail=0;
+static int do_disk=0;
 #define POWER_STATE_PATH "/sys/power/state"
 char *power_state_path=POWER_STATE_PATH ;
 #define STATE_WORD "disk"
 char *state_word=STATE_WORD ;
+//newer kernels want the hibernation method written here before STATE_WORD
+//will be accepted by POWER_STATE_PATH.
+#define POWER_DISK_PATH "/sys/power/disk"
+char *power_disk_path=POWER_DISK_PATH ;
+#define DISK_WORD "platform"
+char *disk_word=DISK_WORD ;
 char *device_path=NULL ;
 static int seconds = 30;
 const char *argvzero = NULL;
@@ -75,6 +82,8 @@ static struct option long_options [] = {
     { "state",1,NULL,'s'},
     { "time",1,NULL,'t'},
     { "device",1,NULL,'d'},
+    { "disk",0,NULL,'p'},
+    { "method",1,NULL,'m'},
     { "dryrun",0,&dryrun,'D'},
     { "syslog",0,&use_syslog,'l'},
     { "verbose",0,&verbose,1},
@@ -384,6 +393,36 @@ static int clean_image_from_device(){
     return ret;
 }
 
+//newer kernels require the hibernation method, eg "platform", to be written to
+///sys/power/disk before they will accept "disk" on /sys/power/state.  unlike
+//write_file() below this write returns immediately and does not suspend us.
+static void write_disk_method(){
+    ssize_t written;
+    size_t  count;
+    int     disk_fd;
+    if(!do_disk){
+        return;
+    }
+    count=strlen(disk_word);
+    verbose_log("%s: writing (%s) to file (%s)\n", argvzero, disk_word, power_disk_path);
+    if(dryrun){
+        return ;
+    }
+    disk_fd=open(power_disk_path, O_TRUNC | O_SYNC | O_WRONLY );
+    if(disk_fd == -1 ){
+        puke("could not open disk method file, default /sys/power/disk, for writing");
+    }
+    written=write(disk_fd,(void *)disk_word,count);
+    if(written!=(ssize_t)count){
+        if(written==-1){
+            puke("write to /sys/power/disk or its alternate failed.");
+        }
+        puke("could not write the whole method word to /sys/power/disk or its alternate in one shot.  bit odd that.");
+    }
+    warnif(close(disk_fd),"problem closing /sys/power/disk or its alternate");
+    verbose_log("%s: wrote (%s) to file (%s)\n", argvzero, disk_word, power_disk_path);
+}
+
 static void write_file(){
     ssize_t written;
     size_t  count=strlen(state_word);
@@ -428,6 +467,11 @@ static void usage(){
 "                                        This option defaults to 30 in order to prevent extra keypress\n"
 "                                        events from causing double suspends where your laptop resumes\n"
 "                                        only to suspend again immediately.\n"
+"    -p  or --disk                       write the hibernation method to /sys/power/disk before suspending.\n"
+"                                        newer kernels require this before they will accept 'disk' on\n"
+"                                        /sys/power/state.\n"
+"    -m  <method> or --method <method>   which method to write to /sys/power/disk. defaults to 'platform'.\n"
+"                                        implies -p.\n"
 "    -x  or --lock-x                     tells ssuspend to lock the screen before suspending\n"
 "    -X  or --lock-x-nofail              tells ssuspend to lock the screen before suspending if possible\n"
 "                                        but continue in any case\n"
@@ -496,6 +540,13 @@ static void handle_options( int argc, char **argv ){
         case 'd':
             strdup_option(&device_path);
             break;
+        case 'p':
+            do_disk=1;
+            break;
+        case 'm':
+            strdup_option(&disk_word);
+            do_disk=1;
+            break;
         case 'D':
             dryrun = 1;
             verbose=1;
@@ -528,6 +579,7 @@ int main(int argc, char **argv ){
     lock_file();
     script(before,preshell,preshell_args);
     remove_modules(argc, argv );
+    write_disk_method();
     if(!dryrun){
         write_file();
     }
