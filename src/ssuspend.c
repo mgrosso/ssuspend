@@ -186,11 +186,13 @@ static void verbose_log(const char *format, ...){
         vsnprintf( buf, SSUSPEND_MAX_MESSAGE-1, format, ap );
         buf[SSUSPEND_MAX_MESSAGE-1]='\0';
         va_end( ap);
+        //buf is already formatted, and can contain '%' from argv, so it must be
+        //passed as an argument and never as a format string of its own.
         if(verbose){
-            fprintf(stderr, buf);
+            fprintf(stderr, "%s", buf);
         }
         if(use_syslog){
-            syslog(syslog_level(LOG_INFO), buf);
+            syslog(syslog_level(LOG_INFO), "%s", buf);
         }
     }
 }
