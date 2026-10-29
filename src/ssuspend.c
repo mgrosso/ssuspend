@@ -33,6 +33,12 @@
 // TODO: and have them call /etc/ssuspend/{before|after}.d/*
 
 #define _GNU_SOURCE
+//configure writes the helper paths below into this header.  it is optional:
+//every path has an #ifndef default further down, so this file still builds
+//standalone with a bare "gcc src/ssuspend.c".
+#ifdef HAVE_CONFIG_H
+#include "system_config.h"
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -97,42 +103,79 @@ static struct option long_options [] = {
     {0,0,0,0}
 };
 
+//the helper paths below are absolute on purpose.  this program is installed
+//setuid root, so resolving them through the caller's $PATH would let anyone
+//substitute their own binary and have us run it as root.  configure fills
+//these in via system_config.h; the #ifndef defaults are the fallback.
+//
+//LOCKX is the one deliberate exception: it only has to talk to the invoking
+//user's X session, so lock_x() drops privileges before exec'ing it and $PATH
+//resolution is harmless -- a hijacked $PATH buys nothing the user did not
+//already have.
 #define LOCKX "xscreensaver-command"
 static char *lockx_args[3] = { LOCKX, "-lock",NULL };
 static const char *lockx = LOCKX ;
 
-#define GREP "grep"
-static char  * grepmod_args[6] = { GREP,"-w","-q",NULL,"/proc/modules",NULL };
-static const char *grep = GREP ;
+//the root helpers get this instead of whatever the caller had in their
+//environment.  the hooks in /etc/ssuspend are shell scripts, so they need a
+//PATH to be useful, but it must be ours and not the caller's.
+//
+//this is built from scratch rather than filtered, which is why there is no
+//IFS here: an unset IFS leaves the shell to use its own default, and nothing
+//hostile can survive into an environment we construct ourselves.  LANG and
+//LC_* are omitted for the same reason, and the resulting C locale keeps
+//grep's matching predictable as a bonus.
+#ifndef SAFE_PATH
+#define SAFE_PATH "/sbin:/bin:/usr/sbin:/usr/bin"
+#endif
+static char *safe_env[2] = { "PATH=" SAFE_PATH, NULL };
+
+#ifndef GREP_PATH
+#define GREP_PATH "/bin/grep"
+#endif
+static char  * grepmod_args[6] = { GREP_PATH,"-w","-q",NULL,"/proc/modules",NULL };
+static const char *grep = GREP_PATH ;
 #define GREPMOD_ARG 3
 
-#define RMMOD "/sbin/rmmod"
-static char  * rmmod_args[3] = { RMMOD,NULL,NULL };
-static const char * rmmod = RMMOD ;
+#ifndef RMMOD_PATH
+#define RMMOD_PATH "/sbin/rmmod"
+#endif
+static char  * rmmod_args[3] = { RMMOD_PATH,NULL,NULL };
+static const char * rmmod = RMMOD_PATH ;
 #define RMMOD_ARG 1
 
-#define MODPROBE "/sbin/modprobe"
-static char  * modprobe_args[3] = { MODPROBE,NULL,NULL };
-static const char * modprobe = MODPROBE ;
+#ifndef MODPROBE_PATH
+#define MODPROBE_PATH "/sbin/modprobe"
+#endif
+static char  * modprobe_args[3] = { MODPROBE_PATH,NULL,NULL };
+static const char * modprobe = MODPROBE_PATH ;
 #define MODPROBE_ARG 1
 
-#define DD "dd"
-static char  * dd_args[6] = { DD,"if=/dev/zero",NULL,"count=10240","bs=1024", NULL };
-static const char * dd = DD;
+#ifndef DD_PATH
+#define DD_PATH "/bin/dd"
+#endif
+static char  * dd_args[6] = { DD_PATH,"if=/dev/zero",NULL,"count=10240","bs=1024", NULL };
+static const char * dd = DD_PATH;
 #define DD_ARG 2
 
-#define MKSWAP "mkswap"
-static char  * mkswap_args[5] = { MKSWAP,"-L","ssuspend",NULL,NULL };
-static const char * mkswap = MKSWAP;
+#ifndef MKSWAP_PATH
+#define MKSWAP_PATH "/sbin/mkswap"
+#endif
+static char  * mkswap_args[5] = { MKSWAP_PATH,"-L","ssuspend",NULL,NULL };
+static const char * mkswap = MKSWAP_PATH;
 #define MKSWAP_ARG 3
 
-#define PRESHELL "/etc/ssuspend/before"
-static char  * preshell_args[2] = { PRESHELL,NULL };
-static const char * preshell = PRESHELL;
+#ifndef PRESHELL_PATH
+#define PRESHELL_PATH "/etc/ssuspend/before"
+#endif
+static char  * preshell_args[2] = { PRESHELL_PATH,NULL };
+static const char * preshell = PRESHELL_PATH;
 #define PRESHELL_ARG 0
-#define POSTSHELL "/etc/ssuspend/after"
-static char  * postshell_args[2] = { POSTSHELL,NULL };
-static const char * postshell = POSTSHELL;
+#ifndef POSTSHELL_PATH
+#define POSTSHELL_PATH "/etc/ssuspend/after"
+#endif
+static char  * postshell_args[2] = { POSTSHELL_PATH,NULL };
+static const char * postshell = POSTSHELL_PATH;
 #define POSTSHELL_ARG 0
 
 
@@ -276,10 +319,21 @@ static int get_exit_status(pid_t pid){
     return ret;
 }
 
-static int fork_exec_wait(const char *command, char *const args[]){
+//there are exactly two kinds of exec here, and the two properties travel
+//together:
+//
+//  as_user==0  root helper.  keeps our privileges, gets safe_env instead of the
+//              caller's environment, and is exec'd by absolute path with no
+//              $PATH search at all.
+//  as_user==1  the X screen locker.  drops to the invoking user first, then
+//              keeps their environment (it needs DISPLAY and XAUTHORITY) and is
+//              located on their $PATH.  neither is a privilege once we are no
+//              longer root.
+static int fork_exec_wait_flags(const char *command, char *const args[], int as_user){
     const char *a;
     int i=0;
-    verbose_log( "%s: running %s, args:", argvzero, command);
+    verbose_log( "%s: running %s%s, args:", argvzero, command,
+            as_user ? " as the invoking user" : " as root with a clean environment");
     for( a = args[i]; a && *a; a=args[++i] ){
         verbose_log("%s %s arg %i=[%s]", argvzero, command, i, a );
     }
@@ -292,13 +346,39 @@ static int fork_exec_wait(const char *command, char *const args[]){
         puke("cant fork");
     }
     else if( pid==0){
-        execvp(command,args);
+        if(as_user){
+            //order matters: once setuid() has succeeded we are no longer
+            //privileged enough to setgid().  both must be checked, because
+            //exec'ing after a failed drop would run the child as root.
+            if( setgid(getgid()) != 0 ){
+                puke("could not drop group privileges");
+            }
+            if( setuid(getuid()) != 0 ){
+                puke("could not drop user privileges");
+            }
+            execvp(command,args);
+        }else{
+            //execve() and not execvp(): no $PATH search, so command has to be
+            //absolute.  configure hands us absolute paths and the #ifndef
+            //defaults are absolute, so a relative one is a misconfiguration and
+            //will fail loudly below rather than resolve against anything.
+            execve(command,args,safe_env);
+        }
         puke(command);
     }
     else{
         giveback=get_exit_status(pid);
     }
     return giveback;
+}
+
+static int fork_exec_wait(const char *command, char *const args[]){
+    return fork_exec_wait_flags(command,args,0);
+}
+
+//for helpers that must not run as root.  see the LOCKX note above.
+static int fork_exec_wait_nopriv(const char *command, char *const args[]){
+    return fork_exec_wait_flags(command,args,1);
 }
 
 static int fork_exec_wait_arg(const char *command, char * args[], int argsub, char *arg ){
@@ -308,9 +388,9 @@ static int fork_exec_wait_arg(const char *command, char * args[], int argsub, ch
 
 static void lock_x(){
     if(do_lockx){
-        pukeif(fork_exec_wait(lockx,lockx_args),lockx);
+        pukeif(fork_exec_wait_nopriv(lockx,lockx_args),lockx);
     }else if(do_lockx_nofail){
-        fork_exec_wait(lockx,lockx_args);
+        fork_exec_wait_nopriv(lockx,lockx_args);
     }
 }
 
@@ -460,8 +540,8 @@ static void usage(){
 "\n"
 "   options are as follows:"
 "    -h  or -? or --help                 get this message\n"
-"    -b  or --before                     runs /etc/ssuspend/before after lock but before ssuspending\n"
-"    -a  or --after                      runs /etc/ssuspend/after after resume but before releasing lock\n"
+"    -b  or --before                     runs " PRESHELL_PATH " after lock but before ssuspending\n"
+"    -a  or --after                      runs " POSTSHELL_PATH " after resume but before releasing lock\n"
 "    -f  <file> or --file <file>         where to write the new state. defaults to /sys/power/state.\n"
 "    -s  <state> or --state <state>      what state to write to the control file. defaults to 'disk'.\n"
 "    -t  <seconds> or --time <seconds>   how many seconds to sleep after resume while holding the lock.\n"
@@ -477,6 +557,12 @@ static void usage(){
 "    -x  or --lock-x                     tells ssuspend to lock the screen before suspending\n"
 "    -X  or --lock-x-nofail              tells ssuspend to lock the screen before suspending if possible\n"
 "                                        but continue in any case\n"
+"                                        both run " LOCKX " as the invoking user rather than as\n"
+"                                        root, keeping your environment and locating it on $PATH.\n"
+"                                        every other helper runs as root from a compiled-in absolute\n"
+"                                        path with a clean environment (PATH=" SAFE_PATH "),\n"
+"                                        so " PRESHELL_PATH " and " POSTSHELL_PATH "\n"
+"                                        do not inherit the calling environment.\n"
 "    -l  or --syslog                     TODO: tells ssuspend to write status information to syslog(3).\n"
 "    -v  or --verbose                    tells ssuspend to write status information to standard error.\n"
 "    -D  or --dryrun                    causes ssuspend to print out what it would do to stderr. implies verbose.\n"
