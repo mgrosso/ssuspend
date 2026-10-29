@@ -51,6 +51,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <getopt.h>
+#include <dirent.h>
 
 #include <sys/swap.h>
 #include <syslog.h>
@@ -59,7 +60,7 @@ static pid_t child_pid;
 static int   child_exit;
 
 static int argc_start=1;
-static char *short_options = "baf:s:t:d:pm:DxXlvh?";
+static char *short_options = "baf:s:t:d:pm:c:wB:DxXlvh?";
 static int before=0;
 static int after=0;
 static int verbose=0;
@@ -80,6 +81,33 @@ char *power_disk_path=POWER_DISK_PATH ;
 char *disk_word=DISK_WORD ;
 char *device_path=NULL ;
 static int seconds = 30;
+
+//-c makes the whole suspend conditional on the battery, -w additionally waits
+//for that condition instead of giving up, and -B names the battery explicitly.
+static int do_battcheck=0;
+static int do_wait=0;
+static int capacity_threshold=0;
+//the /sys/devices path for a battery moves between kernels and between
+//laptops, which is why the example scripts resort to find(1).  the symlinks
+//under /sys/class/power_supply are stable, so look there instead and pick the
+//first supply whose "type" reads Battery.  -B skips the search entirely.
+#ifndef POWER_SUPPLY_PATH
+#define POWER_SUPPLY_PATH "/sys/class/power_supply"
+#endif
+char *power_supply_path=POWER_SUPPLY_PATH ;
+#define BATTERY_TYPE_WORD "Battery"
+#define DISCHARGING_WORD "Discharging"
+//how long -w sleeps between checks.  two levels of stringify so usage() can
+//paste the number into its string literal rather than repeating it.
+#ifndef BATTERY_POLL_SECONDS
+#define BATTERY_POLL_SECONDS 60
+#endif
+#define SSUSPEND_STRINGIFY_(x) #x
+#define SSUSPEND_STRINGIFY(x) SSUSPEND_STRINGIFY_(x)
+#define SSUSPEND_MAX_PATH 1024
+static char battery_path_buf[SSUSPEND_MAX_PATH];
+char *battery_path=NULL ;
+
 const char *argvzero = NULL;
 //NOTE: every entry passes NULL for flag and its short option letter for val, so
 //getopt_long() returns that letter and handle_options() sees it in the switch
@@ -94,6 +122,9 @@ static struct option long_options [] = {
     { "device",1,NULL,'d'},
     { "disk",0,NULL,'p'},
     { "method",1,NULL,'m'},
+    { "capacity",1,NULL,'c'},
+    { "wait",0,NULL,'w'},
+    { "battery",1,NULL,'B'},
     { "dryrun",0,NULL,'D'},
     { "syslog",0,NULL,'l'},
     { "verbose",0,NULL,'v'},
@@ -475,6 +506,144 @@ static int clean_image_from_device(){
     return ret;
 }
 
+//reads one small sysfs file into buf, NUL terminated with trailing whitespace
+//stripped.  returns 0 on success, -1 if it could not be read -- callers use
+//that to probe for which of several attribute names this battery has.
+static int read_sysfs(const char *dir, const char *name, char *buf, size_t buflen){
+    char path[SSUSPEND_MAX_PATH];
+    ssize_t got;
+    int fd;
+    if( snprintf(path,sizeof(path),"%s/%s",dir,name) >= (int)sizeof(path) ){
+        return -1;
+    }
+    fd=open(path,O_RDONLY);
+    if(fd==-1){
+        return -1;
+    }
+    got=read(fd,buf,buflen-1);
+    close(fd);
+    if(got<=0){
+        return -1;
+    }
+    buf[got]='\0';
+    while( got>0 && (buf[got-1]=='\n' || buf[got-1]=='\r' || buf[got-1]==' ') ){
+        buf[--got]='\0';
+    }
+    return 0;
+}
+
+//picks the first power supply whose type is Battery.  only called when -B was
+//not given.
+static void find_battery(){
+    char typebuf[64];
+    struct dirent *entry;
+    DIR *dir=opendir(power_supply_path);
+    if(!dir){
+        puke(power_supply_path);
+    }
+    while( (entry=readdir(dir)) ){
+        if(entry->d_name[0]=='.'){
+            continue;
+        }
+        if( snprintf(battery_path_buf,sizeof(battery_path_buf),"%s/%s",
+                power_supply_path,entry->d_name) >= (int)sizeof(battery_path_buf) ){
+            continue;
+        }
+        if( read_sysfs(battery_path_buf,"type",typebuf,sizeof(typebuf))==0 &&
+                strcmp(typebuf,BATTERY_TYPE_WORD)==0 ){
+            battery_path=battery_path_buf;
+            verbose_log("%s: found battery (%s)\n", argvzero, battery_path);
+            closedir(dir);
+            return;
+        }
+    }
+    closedir(dir);
+    //puke() appends strerror(errno), and readdir() ending normally leaves it
+    //at 0, which would print "Success" after a fatal error.  say what we mean.
+    errno=ENODEV;
+    puke("found no power supply of type Battery, try -B");
+}
+
+//battery charge as a percentage, or -1 if it cannot be worked out.
+//
+//charge_* is tried first because that is what the battpct example script uses,
+//so the number here matches what is on screen.  energy_* is the same thing in
+//uWh instead of uAh and is what some laptops expose instead.  the kernel's own
+//"capacity" is the last resort: it is the most portable but it rounds
+//differently, eg reporting 61 where charge_now/charge_full gives 60.
+static int battery_percent(){
+    char nowbuf[64];
+    char fullbuf[64];
+    long long now;
+    long long full;
+    if( !( read_sysfs(battery_path,"charge_now",nowbuf,sizeof(nowbuf))==0 &&
+           read_sysfs(battery_path,"charge_full",fullbuf,sizeof(fullbuf))==0 ) &&
+        !( read_sysfs(battery_path,"energy_now",nowbuf,sizeof(nowbuf))==0 &&
+           read_sysfs(battery_path,"energy_full",fullbuf,sizeof(fullbuf))==0 ) ){
+        if( read_sysfs(battery_path,"capacity",nowbuf,sizeof(nowbuf))==0 ){
+            return (int)strtoll(nowbuf,NULL,10);
+        }
+        return -1;
+    }
+    now=strtoll(nowbuf,NULL,10);
+    full=strtoll(fullbuf,NULL,10);
+    if(full<=0){
+        return -1;
+    }
+    return (int)((100LL*now)/full);
+}
+
+//true when the battery is discharging and below the -c threshold.
+static int battery_is_low(){
+    char status[64];
+    int pct;
+    if( read_sysfs(battery_path,"status",status,sizeof(status)) != 0 ){
+        puke("could not read battery status");
+    }
+    pct=battery_percent();
+    if(pct<0){
+        puke("could not work out battery percentage");
+    }
+    verbose_log("%s: battery (%s) status=[%s] capacity=%i%% threshold=%i%%\n",
+            argvzero, battery_path, status, pct, capacity_threshold);
+    if( strcmp(status,DISCHARGING_WORD) != 0 ){
+        return 0;
+    }
+    return pct < capacity_threshold;
+}
+
+//the -c / -w gate.  returns nonzero when we should go ahead and suspend.
+//
+//NOTE: this deliberately runs before lock_x() and lock_file() in main().  were
+//it to run after, -w would sit on the /sys/power/state flock for however long
+//it waited, blocking any other ssuspend, and -x would blank the screen at the
+//start of the wait rather than at the suspend.
+static int battery_ready(){
+    if(!do_battcheck){
+        return 1;
+    }
+    if(!battery_path){
+        find_battery();
+    }
+    while(1){
+        if(battery_is_low()){
+            return 1;
+        }
+        if(!do_wait){
+            verbose_log("%s: battery condition not met, not suspending\n", argvzero);
+            return 0;
+        }
+        if(dryrun){
+            verbose_log("%s: battery condition not met, would sleep %i seconds and recheck\n",
+                    argvzero, BATTERY_POLL_SECONDS);
+            return 0;
+        }
+        verbose_log("%s: battery condition not met, sleeping %i seconds\n",
+                argvzero, BATTERY_POLL_SECONDS);
+        sleep(BATTERY_POLL_SECONDS);
+    }
+}
+
 //newer kernels require the hibernation method, eg "platform", to be written to
 ///sys/power/disk before they will accept "disk" on /sys/power/state.  unlike
 //write_file() below this write returns immediately and does not suspend us.
@@ -554,6 +723,17 @@ static void usage(){
 "                                        /sys/power/state.\n"
 "    -m  <method> or --method <method>   which method to write to /sys/power/disk. defaults to 'platform'.\n"
 "                                        implies -p.\n"
+"    -c  <pct> or --capacity <pct>       only suspend if the battery is " DISCHARGING_WORD " and its\n"
+"                                        charge is below <pct> percent, from 1 to 100.  without this\n"
+"                                        option the battery is never consulted.  if the condition is\n"
+"                                        not met ssuspend exits 0 without suspending.\n"
+"    -w  or --wait                       instead of giving up when the -c condition is not met, sleep\n"
+"                                        for " SSUSPEND_STRINGIFY(BATTERY_POLL_SECONDS) " seconds and check again, until it is. requires -c.\n"
+"                                        no lock is held and the screen is not blanked while waiting.\n"
+"    -B  <dir> or --battery <dir>        battery to read, eg /sys/class/power_supply/BAT0.  by default\n"
+"                                        the first supply under " POWER_SUPPLY_PATH "\n"
+"                                        whose type is " BATTERY_TYPE_WORD " is used, so this is only needed for a\n"
+"                                        machine with more than one battery.\n"
 "    -x  or --lock-x                     tells ssuspend to lock the screen before suspending\n"
 "    -X  or --lock-x-nofail              tells ssuspend to lock the screen before suspending if possible\n"
 "                                        but continue in any case\n"
@@ -632,6 +812,16 @@ static void handle_options( int argc, char **argv ){
             strdup_option(&disk_word);
             do_disk=1;
             break;
+        case 'c':
+            capacity_threshold=atoi(optarg);
+            do_battcheck=1;
+            break;
+        case 'w':
+            do_wait=1;
+            break;
+        case 'B':
+            strdup_option(&battery_path);
+            break;
         case 'D':
             dryrun = 1;
             verbose=1;
@@ -654,12 +844,26 @@ static void handle_options( int argc, char **argv ){
             usage();
         }
     }
+    if( do_wait && !do_battcheck ){
+        fprintf(stderr,"%s: -w requires -c, there is nothing to wait for without a threshold.\n",
+                argvzero);
+        usage();
+    }
+    if( do_battcheck && (capacity_threshold < 1 || capacity_threshold > 100) ){
+        fprintf(stderr,"%s: -c takes a battery percentage from 1 to 100, not (%i).\n",
+                argvzero, capacity_threshold);
+        usage();
+    }
 }
 
 int main(int argc, char **argv ){
     argvzero = argv[0];
     handle_options(argc, argv );
     opensyslog();
+    //before lock_x() and lock_file() on purpose, see battery_ready().
+    if(!battery_ready()){
+        return 0;
+    }
     lock_x();
     lock_file();
     script(before,preshell,preshell_args);
