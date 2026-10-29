@@ -226,7 +226,12 @@ static int power_state_fd=-1;
 
 static void opensyslog(){
     if(use_syslog){
-        openlog("ssuspend",LOG_CONS | LOG_PERROR | LOG_PID, LOG_USER );
+        //no LOG_PERROR: it echoes every message to stderr, which duplicated
+        //everything verbose_log() already prints there whenever -v and -l were
+        //given together.  the two flags are now orthogonal -- -v owns stderr,
+        //-l owns syslog -- and LOG_CONS still covers the case where the log
+        //daemon is not running.
+        openlog("ssuspend",LOG_CONS | LOG_PID, LOG_USER );
         //NOTE: setlogmask() wants a bitmask built with LOG_MASK()/LOG_UPTO(),
         //not the priority values themselves.  ORing the priorities together
         //gives 7, which setlogmask reads as EMERG|ALERT|CRIT only, so every
@@ -262,19 +267,29 @@ static int warnif(int ret, const char *message){
 }
 
 #define SSUSPEND_MAX_MESSAGE 1024
+//callers pass their message WITHOUT a trailing newline.  one is added for
+//stderr, so lines do not run together, and withheld from syslog(3), which
+//supplies its own.
 static void verbose_log(const char *format, ...){
     if(verbose || use_syslog){
         char buf[SSUSPEND_MAX_MESSAGE];
         va_list ap;
+        size_t len;
         va_start(ap, format);
         memset( buf, '\0', SSUSPEND_MAX_MESSAGE );
         vsnprintf( buf, SSUSPEND_MAX_MESSAGE-1, format, ap );
         buf[SSUSPEND_MAX_MESSAGE-1]='\0';
         va_end( ap);
+        //strip any the caller passed anyway, rather than emitting a blank line
+        //on stderr and a stray newline into the log.
+        len=strlen(buf);
+        while( len>0 && (buf[len-1]=='\n' || buf[len-1]=='\r') ){
+            buf[--len]='\0';
+        }
         //buf is already formatted, and can contain '%' from argv, so it must be
         //passed as an argument and never as a format string of its own.
         if(verbose){
-            fprintf(stderr, "%s", buf);
+            fprintf(stderr, "%s\n", buf);
         }
         if(use_syslog){
             syslog(LOG_INFO, "%s", buf);
@@ -448,7 +463,7 @@ static void addback_modules(){
 }
 
 static void lock_file(){
-    verbose_log("%s: opening and locking file (%s)\n", argvzero, power_state_path);
+    verbose_log("%s: opening and locking file (%s)", argvzero, power_state_path);
     if(dryrun){
         return ;
     }
@@ -458,11 +473,11 @@ static void lock_file(){
         puke("could not open state file, default /sys/power/state, for writing");
     }
     pukeif(flock(power_state_fd,LOCK_EX|LOCK_NB ),"could not lock /sys/power/state exclusively");
-    verbose_log("%s: opened and locked file (%s)->%i\n", argvzero, power_state_path, power_state_fd);
+    verbose_log("%s: opened and locked file (%s)->%i", argvzero, power_state_path, power_state_fd);
 }
 
 static int do_swapoff(char *path){
-    verbose_log("%s: calling %s(%s)\n",argvzero,"swapoff",path);
+    verbose_log("%s: calling %s(%s)",argvzero,"swapoff",path);
     if(dryrun){
         return 0;
     }
@@ -485,7 +500,7 @@ static int do_mkswap(char *path){
 }
 
 static int do_swapon(char *path){ 
-    verbose_log("%s: calling %s(%s)\n",argvzero,"swapon",path);
+    verbose_log("%s: calling %s(%s)",argvzero,"swapon",path);
     if(dryrun){
         return 0;
     }
@@ -552,7 +567,7 @@ static void find_battery(){
         if( read_sysfs(battery_path_buf,"type",typebuf,sizeof(typebuf))==0 &&
                 strcmp(typebuf,BATTERY_TYPE_WORD)==0 ){
             battery_path=battery_path_buf;
-            verbose_log("%s: found battery (%s)\n", argvzero, battery_path);
+            verbose_log("%s: found battery (%s)", argvzero, battery_path);
             closedir(dir);
             return;
         }
@@ -604,7 +619,7 @@ static int battery_is_low(){
     if(pct<0){
         puke("could not work out battery percentage");
     }
-    verbose_log("%s: battery (%s) status=[%s] capacity=%i%% threshold=%i%%\n",
+    verbose_log("%s: battery (%s) status=[%s] capacity=%i%% threshold=%i%%",
             argvzero, battery_path, status, pct, capacity_threshold);
     if( strcmp(status,DISCHARGING_WORD) != 0 ){
         return 0;
@@ -630,15 +645,15 @@ static int battery_ready(){
             return 1;
         }
         if(!do_wait){
-            verbose_log("%s: battery condition not met, not suspending\n", argvzero);
+            verbose_log("%s: battery condition not met, not suspending", argvzero);
             return 0;
         }
         if(dryrun){
-            verbose_log("%s: battery condition not met, would sleep %i seconds and recheck\n",
+            verbose_log("%s: battery condition not met, would sleep %i seconds and recheck",
                     argvzero, BATTERY_POLL_SECONDS);
             return 0;
         }
-        verbose_log("%s: battery condition not met, sleeping %i seconds\n",
+        verbose_log("%s: battery condition not met, sleeping %i seconds",
                 argvzero, BATTERY_POLL_SECONDS);
         sleep(BATTERY_POLL_SECONDS);
     }
@@ -655,7 +670,7 @@ static void write_disk_method(){
         return;
     }
     count=strlen(disk_word);
-    verbose_log("%s: writing (%s) to file (%s)\n", argvzero, disk_word, power_disk_path);
+    verbose_log("%s: writing (%s) to file (%s)", argvzero, disk_word, power_disk_path);
     if(dryrun){
         return ;
     }
@@ -671,7 +686,7 @@ static void write_disk_method(){
         puke("could not write the whole method word to /sys/power/disk or its alternate in one shot.  bit odd that.");
     }
     warnif(close(disk_fd),"problem closing /sys/power/disk or its alternate");
-    verbose_log("%s: wrote (%s) to file (%s)\n", argvzero, disk_word, power_disk_path);
+    verbose_log("%s: wrote (%s) to file (%s)", argvzero, disk_word, power_disk_path);
 }
 
 static void write_file(){
@@ -759,12 +774,10 @@ static void strdup_option( char **dest ){
 }
 
 static int do_sleep(){
-    if(verbose){
-        fprintf(stderr,"%s: sleeping for (%i)\n", argvzero,seconds);
-        if(use_syslog){
-            syslog(LOG_INFO, "%s: sleeping for (%i)\n", argvzero,seconds);
-        }
-    }
+    //this used to hand-roll the same two writes that verbose_log() does, but
+    //with the syslog() nested inside "if(verbose)", so -l on its own dropped
+    //the message entirely.
+    verbose_log("%s: sleeping for (%i)", argvzero, seconds);
     if(dryrun){
         return 0;
     }
