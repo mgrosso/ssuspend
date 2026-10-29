@@ -324,7 +324,7 @@ static void addback_modules(){
 }
 
 static void lock_file(){
-    verbose_log("%s: locking file (%s)\n", argvzero, power_state_path);
+    verbose_log("%s: opening and locking file (%s)\n", argvzero, power_state_path);
     if(dryrun){
         return ;
     }
@@ -334,6 +334,7 @@ static void lock_file(){
         puke("could not open state file, default /sys/power/state, for writing");
     }
     pukeif(flock(power_state_fd,LOCK_EX|LOCK_NB ),"could not lock /sys/power/state exclusively");
+    verbose_log("%s: opened and locked file (%s)->%i\n", argvzero, power_state_path, power_state_fd);
 }
 
 static int do_swapoff(char *path){
