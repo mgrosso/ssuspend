@@ -3,7 +3,7 @@
 
 
 AC_PREREQ([2.69])
-AC_INIT([ssuspend], [0.1.0], [mgrosso@acm.org])
+AC_INIT([ssuspend], [1.0.0], [mgrosso@acm.org])
 
 AC_CANONICAL_BUILD
 AC_CANONICAL_HOST

@@ -1,20 +1,29 @@
 #!/bin/sh
 # /etc/acpi/default.sh
 # Default acpi script that takes an entry for all actions
- 
+#
+# This handles the power button and the lid, which still need acpid.
+#
+# It used to handle low battery too, by reading
+# /proc/acpi/battery/BAT0/state.  That interface no longer exists on current
+# kernels, and ssuspend does the job itself now, so that section is gone.  Run
+# this instead, once, from your session:
+#
+#     ssuspend -p -X -c 10 -w iwl3945
+#
+# which waits, holding no lock, until the battery is Discharging and under 10
+# percent.  See the "Suspending on low battery" section of the README.
+
 set $*
- 
+
 group=${1%%/*}
 action=${1#*/}
 device=$2
 id=$3
 value=$4
- 
-#minimum milliamp hours remaining:
-MIN_MAH=100
-SUSPEND=/usr/local/sbin/ssuspend 
-BAT_STATE_FILE=/proc/acpi/battery/BAT0/state
- 
+
+SUSPEND=/usr/local/sbin/ssuspend
+
 logger "ACPI default.sh: group=$group action=$action device=$device id=$id  value=$value  full=$*"
  
 log_unhandled() {
@@ -23,7 +32,7 @@ log_unhandled() {
  
 sleepnow(){
     logger "ACPI default.sh sleepnow(): group=$group action=$action device=$device id=$id  value=$value  full=$*"
-    $SUSPEND -X iwl3945
+    $SUSPEND -X -p iwl3945
     exit $?
 }
  
@@ -39,22 +48,7 @@ if [ x$group == xbutton ] ; then
         exit $?
     fi  
 fi
-if [ x$group == xbattery ] ; then
-    logger "ACPI default.sh group == battery"
-    if [ x$action == xbattery ] ; then
-        MAH=$( cat $BAT_STATE_FILE |\
-                /bin/grep ^remaining|\
-                gawk '{print $3 }') 
-        if [ $MAH -ge $MIN_MAH ] ; then 
-             logger ACPI BAT0 ok, $MAH mah remaining
-             exit
-        else
-             logger ACPI BAT0 dead. use $MAH mah to suspend
-             sleepnow 
-        fi
-    fi  
-fi
-log_unhandled $*  
-exit 
+log_unhandled $*
+exit
 
 

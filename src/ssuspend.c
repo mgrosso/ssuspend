@@ -39,6 +39,12 @@
 #ifdef HAVE_CONFIG_H
 #include "system_config.h"
 #endif
+//PACKAGE_VERSION comes from that header.  configure.ac's AC_INIT is the
+//authority for it -- this default only exists so the standalone build has
+//something to print.
+#ifndef PACKAGE_VERSION
+#define PACKAGE_VERSION "1.0.0"
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -717,22 +723,23 @@ static void close_file(){
 static void usage(){
     fprintf(stderr,"%s [options] [module [ module ... ] ]\n"
 "\n"
-"version 1.0.0\n"
+"version " PACKAGE_VERSION "\n"
 "\n"
-"   each module argument found in /proc/modules is removed in order on the way down, and restored \n"
-"       in reverse order on the way back up.\n"
+"   each module argument found in /proc/modules is removed in order on the way down,\n"
+"       and restored in reverse order on the way back up.\n"
 "\n"
-"   options are as follows:"
+"   options are as follows:\n"
 "    -h  or -? or --help                 get this message\n"
 "    -b  or --before                     runs " PRESHELL_PATH " after lock but before ssuspending\n"
 "    -a  or --after                      runs " POSTSHELL_PATH " after resume but before releasing lock\n"
 "    -f  <file> or --file <file>         where to write the new state. defaults to /sys/power/state.\n"
 "    -s  <state> or --state <state>      what state to write to the control file. defaults to 'disk'.\n"
 "    -t  <seconds> or --time <seconds>   how many seconds to sleep after resume while holding the lock.\n"
-"    -d  <device> or --device <device>   an optional swap device to wipe clean of stale suspend images after waking up.\n"
-"                                        This option defaults to 30 in order to prevent extra keypress\n"
-"                                        events from causing double suspends where your laptop resumes\n"
-"                                        only to suspend again immediately.\n"
+"                                        defaults to 30, in order to prevent extra keypress events from\n"
+"                                        causing double suspends where your laptop resumes only to\n"
+"                                        suspend again immediately.\n"
+"    -d  <device> or --device <device>   an optional swap device to wipe clean of stale suspend images\n"
+"                                        after waking up.\n"
 "    -p  or --disk                       write the hibernation method to /sys/power/disk before suspending.\n"
 "                                        newer kernels require this before they will accept 'disk' on\n"
 "                                        /sys/power/state.\n"
@@ -758,9 +765,11 @@ static void usage(){
 "                                        path with a clean environment (PATH=" SAFE_PATH "),\n"
 "                                        so " PRESHELL_PATH " and " POSTSHELL_PATH "\n"
 "                                        do not inherit the calling environment.\n"
-"    -l  or --syslog                     TODO: tells ssuspend to write status information to syslog(3).\n"
+"    -l  or --syslog                     tells ssuspend to write status information to syslog(3).\n"
+"                                        warnings and errors only unless -v is also given.\n"
 "    -v  or --verbose                    tells ssuspend to write status information to standard error.\n"
-"    -D  or --dryrun                    causes ssuspend to print out what it would do to stderr. implies verbose.\n"
+"    -D  or --dryrun                     causes ssuspend to print out what it would do to stderr.\n"
+"                                        implies verbose.\n"
 "\n", argvzero
    );
     exit(1);
