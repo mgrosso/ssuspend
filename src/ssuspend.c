@@ -386,7 +386,9 @@ static int fork_exec_wait_flags(const char *command, char *const args[], int as_
     int i=0;
     verbose_log( "%s: running %s%s, args:", argvzero, command,
             as_user ? " as the invoking user" : " as root with a clean environment");
-    for( a = args[i]; a && *a; a=args[++i] ){
+    //NULL terminates the vector; an empty string is a legitimate argument and
+    //must not stop the listing early.
+    for( a = args[i]; a; a=args[++i] ){
         verbose_log("%s %s arg %i=[%s]", argvzero, command, i, a );
     }
     if(dryrun){
@@ -702,14 +704,18 @@ static void write_file(){
     written=write(power_state_fd,(void *)state_word,count);
     //when we get here, either the call succeeded, in which case we have just finished resuming,
     //or the call failed in which case we never went to sleep.
-    if(written!=count){
+    if(written!=(ssize_t)count){
+        char msg[SSUSPEND_MAX_MESSAGE];
         if(written==-1){
-            puke("write to /sys/power/state or its alternate failed.");
-        }else if(written<count){
-            puke("could not write the entire word 'disk' to /sys/power/state or its alternate in one shot.  bit odd that.");
-        }else if(written>count){
-            puke("wrote too many characters trying to write 'disk' to /sys/power/state.  bit odd that.");
+            snprintf(msg,sizeof(msg),"write of (%s) to (%s) failed",
+                    state_word, power_state_path);
+        }else{
+            //covers both short and over-long writes; neither should happen.
+            snprintf(msg,sizeof(msg),
+                    "wrote %zd of %zu bytes of (%s) to (%s) in one shot.  bit odd that.",
+                    written, count, state_word, power_state_path);
         }
+        puke(msg);
     }
     //warnif(fdatasync(power_state_fd),"could not fdatasync() /sys/power/state or its alternate.");
 }
@@ -775,6 +781,13 @@ static void usage(){
     exit(1);
 }
 
+//NOTE: passing the same option twice leaks the earlier copy.  That is
+//deliberate, not an oversight: power_state_path, state_word and disk_word are
+//initialised to string literals, so freeing *dest here would free a literal
+//the first time any of those options is used, which is undefined behaviour in
+//a setuid root program.  Fixing it properly means tracking ownership, or
+//giving the defaults their own storage, which is not worth it to reclaim a few
+//bytes from a process that exits seconds later.
 static void strdup_option( char **dest ){
     *dest = strdup(optarg);
     if(*dest == NULL ){
@@ -783,6 +796,13 @@ static void strdup_option( char **dest ){
 }
 
 static int do_sleep(){
+    //sleep() takes an unsigned, so a negative -t used to convert to roughly a
+    //century of sleeping while still holding the lock on POWER_STATE_PATH,
+    //which blocked every later ssuspend until this one was killed.
+    if(seconds<=0){
+        verbose_log("%s: not sleeping, -t is (%i)", argvzero, seconds);
+        return 0;
+    }
     //this used to hand-roll the same two writes that verbose_log() does, but
     //with the syslog() nested inside "if(verbose)", so -l on its own dropped
     //the message entirely.
@@ -797,7 +817,7 @@ static void script(int opt,const char *script, char *script_args[] ){
     if(!opt){
         return;
     }
-    return pukeif(fork_exec_wait(script, script_args),script);
+    pukeif(fork_exec_wait(script, script_args),script);
 }
 
 static void handle_options( int argc, char **argv ){
