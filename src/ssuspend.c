@@ -62,9 +62,6 @@
 #include <sys/swap.h>
 #include <syslog.h>
 
-static pid_t child_pid;
-static int   child_exit;
-
 static int argc_start=1;
 static char *short_options = "baf:s:t:d:pm:c:wB:DxXlvh?";
 static int before=0;
@@ -355,9 +352,6 @@ static int get_exit_status(pid_t pid){
         puke("could not get exit status, process not dead yet even though flags said to wait");
     }
     if(ret==-1){
-        if(child_pid==pid){
-            return child_exit;
-        }
         puke("could not get exit status");
     }
     if(ret==pid){
@@ -720,12 +714,6 @@ static void write_file(){
     //warnif(fdatasync(power_state_fd),"could not fdatasync() /sys/power/state or its alternate.");
 }
 
-static void close_file(){
-    //NOTE: strictly speaking this isnt needed as _exit() will do it for us after 
-    //NOTE: stubbing as doing it caused problems.
-    //warnif(close(power_state_fd), "problem closing /sys/power/state");
-}
-
 static void usage(){
     fprintf(stderr,"%s [options] [module [ module ... ] ]\n"
 "\n"
@@ -918,7 +906,9 @@ int main(int argc, char **argv ){
     script(after,postshell,postshell_args);
     do_sleep();
     clean_image_from_device();
-    close_file();
+    //NOTE: nothing is freed or closed explicitly.  The strings from
+    //strdup_option(), the node_t list behind push()/pop(), the descriptor from
+    //lock_file() and it's flock are all reclaimed by the kernel.
     return 0;
 }
 
