@@ -20,16 +20,50 @@ battery" below.
 == Installation ==
 
 === Configure and Build ===
-ssuspend uses GNU autoconf, so it is configured and built
-with the standard sequence:
-{{{
 
+ssuspend uses GNU autoconf and automake.  The generated files are not kept in
+git, so a fresh checkout has no ./configure yet and you have to make one:
+
+{{{
+	autoreconf -i
 	./configure
 	make
 }}}
 
-To install type "make install" or simply copy the executable
-"src/ssuspend" to a suitable directory.
+A release tarball already contains ./configure, so there the first step is
+unnecessary.
+
+configure finds the helper programs ssuspend runs, and compiles their absolute
+paths in.  Override any of them if it guesses wrong:
+
+{{{
+	./configure --with-grep=/usr/bin/grep --with-mkswap=/usr/sbin/mkswap
+}}}
+
+--with-dd, --with-rmmod and --with-modprobe work the same way, and
+--with-before-script / --with-after-script move the optional /etc/ssuspend
+hooks.  A tool that is not found is only a warning, not an error: a built-in
+default is used instead.
+
+=== Install ===
+
+"make install" puts the binary in $prefix/sbin, or just copy "src/ssuspend"
+wherever you like.
+
+ssuspend writes to /sys/power/state, so it needs root.  Either make it setuid:
+
+{{{
+	chown root:root /usr/local/sbin/ssuspend
+	chmod u+s /usr/local/sbin/ssuspend
+}}}
+
+or leave it unprivileged and call it through sudo, as the fvwm example below
+does.  Both work; setuid avoids needing a sudoers entry, and ssuspend is
+written with that use in mind -- it resolves every helper it runs as root from
+a compiled-in absolute path and hands them a clean environment, so a hostile
+$PATH cannot redirect them.  The one exception is the screen locker from -x
+and -X, which is deliberately run with your own privileges and found on your
+own $PATH, since it only needs to talk to your X session.
 
 === Using with Fvwm ===
 

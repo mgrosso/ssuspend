@@ -16,13 +16,10 @@ if test x$CFLAGS = x ; then
     CFLAGS="-g"
 fi
 
-# Checks for programs.
+# Checks for programs.  No AC_PROG_CXX or AC_PROG_RANLIB: there are no C++
+# sources and no libraries are built, so both only slowed configure down.
 AC_USE_SYSTEM_EXTENSIONS
-AC_PROG_CXX
 AC_PROG_CC
-#add something to do this later, its not an existing macro...
-#AC_PROG_AR
-AC_PROG_RANLIB
 AC_PROG_INSTALL
 
 # Absolute paths for the helpers ssuspend runs as root.  A setuid binary must
