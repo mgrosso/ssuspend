@@ -91,6 +91,18 @@ fi
 AC_DEFINE_UNQUOTED([MODPROBE_PATH],["$ssuspend_modprobe"],
     [absolute path to modprobe])
 
+# Where to look for a battery when -B is not given.  Policy like the paths
+# above -- a privileged process reads it -- so it is compiled in rather than
+# taken from the environment.  Not autodetected: it is a kernel interface name,
+# not a program, so there is nothing to search for.
+AC_ARG_WITH([power-supply-path],
+    [AS_HELP_STRING([--with-power-supply-path=DIR],
+        [sysfs directory scanned for batteries @<:@/sys/class/power_supply@:>@])],
+    [ssuspend_power_supply="$withval"],
+    [ssuspend_power_supply="/sys/class/power_supply"])
+AC_DEFINE_UNQUOTED([POWER_SUPPLY_PATH],["$ssuspend_power_supply"],
+    [sysfs directory scanned for batteries])
+
 # The environment handed to those root helpers.  Compiled in for the same
 # reason their paths are: it decides what a privileged child inherits, so it
 # must not be settable by whoever invokes a setuid ssuspend.

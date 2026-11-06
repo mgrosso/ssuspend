@@ -63,7 +63,7 @@
 #include <syslog.h>
 
 static int argc_start=1;
-static char *short_options = "baf:F:s:t:d:pm:c:wB:DxXlvh?";
+static char *short_options = "baf:F:s:t:d:pm:c:wW:B:S:DxXlvh?";
 static int before=0;
 static int after=0;
 static int verbose=0;
@@ -91,25 +91,34 @@ static int seconds = 30;
 #endif
 
 //-c makes the whole suspend conditional on the battery, -w additionally waits
-//for that condition instead of giving up, and -B names the battery explicitly.
+//for that condition instead of giving up at the interval -W sets, -B names the
+//battery explicitly and -S says where to look for one.
 static int do_battcheck=0;
 static int do_wait=0;
 static int capacity_threshold=0;
 //the /sys/devices path for a battery moves between kernels and between
 //laptops, which is why the example scripts resort to find(1).  the symlinks
 //under /sys/class/power_supply are stable, so look there instead and pick the
-//first supply whose "type" reads Battery.  -B skips the search entirely.
+//first supply whose "type" reads Battery.  -S moves the directory searched and
+//-B skips the search entirely; both are policy, so both are gated.
 #ifndef POWER_SUPPLY_PATH
 #define POWER_SUPPLY_PATH "/sys/class/power_supply"
 #endif
 char *power_supply_path=POWER_SUPPLY_PATH ;
 #define BATTERY_TYPE_WORD "Battery"
 #define DISCHARGING_WORD "Discharging"
-//how long -w sleeps between checks.  two levels of stringify so usage() can
-//paste the number into its string literal rather than repeating it.
+//how long -w sleeps between checks.  the macro is only the default that
+//usage() advertises; -W sets poll_seconds at run time.  two levels of
+//stringify so usage() can paste the number in rather than repeating it.
+//
+//this one is a parameter rather than policy: it changes how long we wait, not
+//what a privileged process touches, and no lock is held while waiting.  so it
+//needs no privilege gate, and gets no --with- knob -- those are reserved for
+//the install-time policy strings.
 #ifndef BATTERY_POLL_SECONDS
 #define BATTERY_POLL_SECONDS 60
 #endif
+static int poll_seconds = BATTERY_POLL_SECONDS;
 #define SSUSPEND_STRINGIFY_(x) #x
 #define SSUSPEND_STRINGIFY(x) SSUSPEND_STRINGIFY_(x)
 #define SSUSPEND_MAX_PATH 1024
@@ -133,7 +142,9 @@ static struct option long_options [] = {
     { "method",1,NULL,'m'},
     { "capacity",1,NULL,'c'},
     { "wait",0,NULL,'w'},
+    { "wait-interval",1,NULL,'W'},
     { "battery",1,NULL,'B'},
+    { "supply-dir",1,NULL,'S'},
     { "dryrun",0,NULL,'D'},
     { "syslog",0,NULL,'l'},
     { "verbose",0,NULL,'v'},
@@ -664,12 +675,12 @@ static int battery_ready(){
         }
         if(dryrun){
             verbose_log("%s: battery condition not met, would sleep %i seconds and recheck",
-                    argvzero, BATTERY_POLL_SECONDS);
+                    argvzero, poll_seconds);
             return 0;
         }
         verbose_log("%s: battery condition not met, sleeping %i seconds",
-                argvzero, BATTERY_POLL_SECONDS);
-        sleep(BATTERY_POLL_SECONDS);
+                argvzero, poll_seconds);
+        sleep(poll_seconds);
     }
 }
 
@@ -758,12 +769,17 @@ static void usage(){
 "                                        option the battery is never consulted.  if the condition is\n"
 "                                        not met ssuspend exits 0 without suspending.\n"
 "    -w  or --wait                       instead of giving up when the -c condition is not met, sleep\n"
-"                                        for " SSUSPEND_STRINGIFY(BATTERY_POLL_SECONDS) " seconds and check again, until it is. requires -c.\n"
-"                                        no lock is held and the screen is not blanked while waiting.\n"
+"                                        and check again, until it is. requires -c.  no lock is held\n"
+"                                        and the screen is not blanked while waiting.\n"
+"    -W  <seconds> or --wait-interval <seconds>\n"
+"                                        how long -w sleeps between checks. defaults to\n"
+"                                        " SSUSPEND_STRINGIFY(BATTERY_POLL_SECONDS) " seconds. implies -w.\n"
 "    -B  <dir> or --battery <dir>        battery to read, eg /sys/class/power_supply/BAT0.  by default\n"
-"                                        the first supply under " POWER_SUPPLY_PATH "\n"
-"                                        whose type is " BATTERY_TYPE_WORD " is used, so this is only needed for a\n"
-"                                        machine with more than one battery.\n"
+"                                        the first supply under the directory below whose type is\n"
+"                                        " BATTERY_TYPE_WORD " is used, so this is only needed for a machine with\n"
+"                                        more than one battery.\n"
+"    -S  <dir> or --supply-dir <dir>     where to look for batteries when -B is not given. defaults\n"
+"                                        to " POWER_SUPPLY_PATH ".\n"
 "    -x  or --lock-x                     tells ssuspend to lock the screen before suspending\n"
 "    -X  or --lock-x-nofail              tells ssuspend to lock the screen before suspending if possible\n"
 "                                        but continue in any case\n"
@@ -781,15 +797,16 @@ static void usage(){
 "\n"
 "   build time vs run time:\n"
 "\n"
-"    -f, -F, -d and -B say where a privileged process reads and writes, so they\n"
-"    are refused when ssuspend is running from its setuid or setgid bit.  that\n"
-"    policy belongs to whoever installed it: the defaults above are compiled in,\n"
-"    and configure's --with-grep, --with-dd, --with-mkswap, --with-rmmod,\n"
-"    --with-modprobe, --with-before-script, --with-after-script and\n"
-"    --with-safe-path set them.  run as root, or build without the setuid bit,\n"
-"    and all four work normally -- which is how to test them.\n"
+"    -f, -F, -d, -B and -S say where a privileged process reads and writes, so\n"
+"    they are refused when ssuspend is running from its setuid or setgid bit.\n"
+"    that policy belongs to whoever installed it: the defaults above are\n"
+"    compiled in, and configure's --with-grep, --with-dd, --with-mkswap,\n"
+"    --with-rmmod, --with-modprobe, --with-before-script, --with-after-script,\n"
+"    --with-power-supply-path and --with-safe-path set them.  run as root, or\n"
+"    build without the setuid bit, and all five work normally -- which is how to\n"
+"    test them.\n"
 "\n"
-"    -s and -m are allowed either way.  with the paths pinned they only write a\n"
+"    -t, -W, -s and -m are allowed either way.  with the paths pinned they only write a\n"
 "    word to the control files above, and the kernel rejects any word it does\n"
 "    not know, so picking 'mem' instead of 'disk' stays available to everyone.\n"
 "\n"
@@ -824,7 +841,7 @@ static int running_elevated(){
     return ( getuid() != geteuid() ) || ( getgid() != getegid() );
 }
 
-//-f, -F, -d and -B say WHERE a privileged process reads and writes.  That is
+//-f, -F, -d, -B and -S say WHERE a privileged process reads and writes.  That is
 //policy, fixed at install time by whoever set the setuid bit, and not a
 //parameter for the caller to pick: -f alone is enough to truncate any existing
 //file and fill it with whatever -s says.  So they are refused outright when we
@@ -918,8 +935,15 @@ static void handle_options( int argc, char **argv ){
         case 'w':
             do_wait=1;
             break;
+        case 'W':
+            poll_seconds=atoi(optarg);
+            do_wait=1;
+            break;
         case 'B':
             policy_option(&battery_path,"-B");
+            break;
+        case 'S':
+            policy_option(&power_supply_path,"-S");
             break;
         case 'D':
             dryrun = 1;
@@ -961,6 +985,15 @@ static void handle_options( int argc, char **argv ){
                 argvzero, MAX_SLEEP_SECONDS, seconds);
         usage();
     }
+    //no lock is held while waiting, so a long interval is only useless rather
+    //than harmful.  bounded anyway, and with the same ceiling as -t, so the
+    //two "seconds" options behave alike.  a zero or negative interval would
+    //spin.
+    if( poll_seconds < 1 || poll_seconds > MAX_SLEEP_SECONDS ){
+        fprintf(stderr,"%s: -W takes 1 to %i seconds, not (%i).\n",
+                argvzero, MAX_SLEEP_SECONDS, poll_seconds);
+        usage();
+    }
 }
 
 int main(int argc, char **argv ){
@@ -969,7 +1002,7 @@ int main(int argc, char **argv ){
     opensyslog();
     verbose_log("%s: uid=%i euid=%i gid=%i egid=%i%s", argvzero,
             (int)getuid(), (int)geteuid(), (int)getgid(), (int)getegid(),
-            running_elevated() ? " (elevated: -f, -F, -d and -B are refused)" : "");
+            running_elevated() ? " (elevated: -f, -F, -d, -B and -S are refused)" : "");
     //before lock_x() and lock_file() on purpose, see battery_ready().
     if(!battery_ready()){
         return 0;
