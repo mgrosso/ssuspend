@@ -1,8 +1,16 @@
-= ssuspend 1.0.0 =
+# ssuspend
 
-== About ==
+`ssuspend` is a small C program intended to assist in managing suspend and resume on Linux laptops or customized Linux environments.
 
-ssuspend is a small c program that locks /sys/power/state, removes zero or more
+## Motivation
+
+The first and primary use case in 2008 was to allow unprivileged keystrokes captured by a window manager to safely read and write to the /sys/ paths needed for suspend to disk. Functionality was added to coordinate the before and after unloading and loading of kernel modules that didn't play nicely with suspend/resume, and additional features optionally ensure that the screen is locked when the laptop resumes.
+
+18 years later Linux distributions and device modules are much better about handling suspend and resume out of the box, so this utility won't find a wide audience, however for those that want to run a tiny utility to suspend when battery hits 5% without fighting their distributions ACPI configurations or who want their own window manager hot-key to suspend exactly in the way that they want without introducing security issues, ssuspend still fills that need.
+
+## Overview
+
+ssuspend locks /sys/power/state, optionally removes zero or more
 kernel modules, echoes a suspend mode into /sys/power/state, and then sleeps 30
 or so seconds before unlocking that file.  Because it will not wait for the
 lock but exit immediately if it cant acquire that lock exclusively, it is safe
@@ -15,13 +23,13 @@ caller may and may not change" below, and the note on sudo after it.
 
 It can also make the whole thing conditional on the battery being low and
 discharging, and optionally wait for that to become true, which removes the
-need for an acpid handler to watch the battery.  See "Suspending on low
+need for a custom acpid handler to watch the battery.  See "Suspending on low
 battery" below.
 
 
-== Installation ==
+## Installation
 
-=== Configure and Build ===
+### Configure and Build
 
 ssuspend uses GNU autoconf and automake.  The generated files are not kept in
 git, so a fresh checkout has no ./configure yet and you have to make one:
@@ -47,7 +55,7 @@ paths in.  Override any of them if it guesses wrong:
 hooks.  A tool that is not found is only a warning, not an error: a built-in
 default is used instead.
 
-=== Install ===
+### Install
 
 "make install" puts the binary in $prefix/sbin, or just copy "src/ssuspend"
 wherever you like.
@@ -62,7 +70,7 @@ ssuspend writes to /sys/power/state, so it needs root.  Either make it setuid:
 or leave it unprivileged and call it through sudo, as the fvwm example below
 does.  Both work, but they are not equally safe -- see below.
 
-=== What a caller may and may not change ===
+### What a caller may and may not change
 
 ssuspend splits its inputs in two.
 
@@ -97,7 +105,7 @@ recognise, so choosing "mem" instead of "disk" stays available to everyone.
 The check is uid != euid (or gid != egid), which asks whether this binary
 granted the privilege or the caller already had it.
 
-=== Why setuid is safer than sudo here ===
+### Why setuid is safer than sudo here
 
 That check cannot help under sudo.  "sudo ssuspend" runs with real uid 0, so it
 looks like genuine root and -f, -F, -d and -B are all permitted.  If sudoers
@@ -111,7 +119,7 @@ exception is the screen locker from -x and -X, which is deliberately run with
 your own privileges and found on your own $PATH, since it only needs to talk to
 your X session.
 
-=== Using with Fvwm ===
+### Using with Fvwm
 
 I personally use this with fvwm using the following lines...
 
@@ -125,7 +133,7 @@ Key End     A   MC  Suspend
 
 so that the laptop sleeps whenever alt-control-end is pressed.
 
-=== Suspending on low battery ===
+### Suspending on low battery
 
 ssuspend can make the suspend conditional on the battery itself, which removes
 the need for an acpid battery handler entirely:
@@ -151,7 +159,7 @@ whose type is Battery, so this keeps working across kernel upgrades and across
 machines without having to chase the /sys/devices path.  Use -B to name one
 explicitly if the machine has more than one battery.
 
-=== Using with acpid ===
+### Using with acpid
 
 NOTE: this section predates the -c and -w options above, which are now the
 easier way to suspend on low battery.  The script is still useful for power
@@ -163,7 +171,7 @@ The script I use is in doc/default.sh.  Read it before copying it to
 /etc/acpi/default.sh, to make sure you dont lose some other functionality
 specific to your own distribution that isn't in this one.
 
-== OPTIONS ==
+## OPTIONS
 
 This is a paste of `ssuspend -h`, showing the compiled-in defaults;
 regenerate it after changing any option.  The helper paths shown are what
@@ -237,7 +245,7 @@ version 1.0.0
     word to the control files above, and the kernel rejects any word it does
     not know, so picking 'mem' instead of 'disk' stays available to everyone.
 
-    the programs ssuspend runs as root have no run time override at all, by
+    The programs ssuspend runs as root have no run time override at all, by
     design: one would be an arbitrary-command-as-root option.
 $
 }}}
