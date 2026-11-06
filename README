@@ -9,7 +9,9 @@ lock but exit immediately if it cant acquire that lock exclusively, it is safe
 to use from window managers where a keyboard shortcut keypress held down too
 long or some other race condition might lead to the program being called
 multiple times quickly in succession.  Because it is a small program written
-carefully in c, it is fairly safe to make setuid or add to /etc/sudoers.
+carefully in c, it is fairly safe to make setuid; it refuses the options that
+would let an unprivileged caller redirect what root touches.  See "What a
+caller may and may not change" below, and the note on sudo after it.
 
 It can also make the whole thing conditional on the battery being low and
 discharging, and optionally wait for that to become true, which removes the
@@ -58,12 +60,56 @@ ssuspend writes to /sys/power/state, so it needs root.  Either make it setuid:
 }}}
 
 or leave it unprivileged and call it through sudo, as the fvwm example below
-does.  Both work; setuid avoids needing a sudoers entry, and ssuspend is
-written with that use in mind -- it resolves every helper it runs as root from
-a compiled-in absolute path and hands them a clean environment, so a hostile
-$PATH cannot redirect them.  The one exception is the screen locker from -x
-and -X, which is deliberately run with your own privileges and found on your
-own $PATH, since it only needs to talk to your X session.
+does.  Both work, but they are not equally safe -- see below.
+
+=== What a caller may and may not change ===
+
+ssuspend splits its inputs in two.
+
+Policy is what a privileged process is allowed to touch: which files it reads
+and writes, which programs it runs, and what environment those programs get.
+That belongs to whoever installs the binary and sets the setuid bit, so it is
+compiled in.  configure sets it:
+
+	--with-grep=          --with-dd=             --with-mkswap=
+	--with-rmmod=         --with-modprobe=       --with-safe-path=
+	--with-before-script= --with-after-script=
+
+The programs run as root have no run time override at all, deliberately: such
+an option would be an arbitrary-command-as-root switch.
+
+Parameters are how one invocation behaves, and the caller picks them freely:
+-t, -c, -w, -p, -x, -X, -b, -a, -v, -l, -D.
+
+Four options sit in between.  -f and -F name the control files written to, -d
+names a swap device wiped and rebuilt, and -B names a battery directory read.
+Each redirects where a root process reads or writes -- -f on its own is enough
+to truncate any existing file and refill it with whatever -s says -- so all
+four are refused outright when ssuspend is running from its setuid or setgid
+bit.  Run it as root, or build it without the setuid bit, and they work
+normally.  That is how to test them: a non-setuid build behaves exactly like
+the installed one except that these four are permitted.
+
+-s and -m are allowed either way.  With the paths pinned they only write a word
+to the compiled-in control files, where the kernel rejects anything it does not
+recognise, so choosing "mem" instead of "disk" stays available to everyone.
+
+The check is uid != euid (or gid != egid), which asks whether this binary
+granted the privilege or the caller already had it.
+
+=== Why setuid is safer than sudo here ===
+
+That check cannot help under sudo.  "sudo ssuspend" runs with real uid 0, so it
+looks like genuine root and -f, -F, -d and -B are all permitted.  If sudoers
+grants ssuspend to anyone you would not hand a root shell to, you have to
+restrict the arguments in sudoers as well, which is easy to get wrong.
+
+Setuid has no such gap, so prefer it unless you have a reason not to.  Either
+way, every helper ssuspend runs as root comes from a compiled-in absolute path
+and gets a clean environment, so a hostile $PATH cannot redirect them.  The one
+exception is the screen locker from -x and -X, which is deliberately run with
+your own privileges and found on your own $PATH, since it only needs to talk to
+your X session.
 
 === Using with Fvwm ===
 
@@ -147,6 +193,8 @@ version 1.0.0
     -p  or --disk                       write the hibernation method to /sys/power/disk before suspending.
                                         newer kernels require this before they will accept 'disk' on
                                         /sys/power/state.
+    -F  <file> or --disk-file <file>    where to write the method. defaults to /sys/power/disk.
+                                        implies -p.
     -m  <method> or --method <method>   which method to write to /sys/power/disk. defaults to 'platform'.
                                         implies -p.
     -c  <pct> or --capacity <pct>       only suspend if the battery is Discharging and its
@@ -174,5 +222,22 @@ version 1.0.0
     -v  or --verbose                    tells ssuspend to write status information to standard error.
     -D  or --dryrun                     causes ssuspend to print out what it would do to stderr.
                                         implies verbose.
+
+   build time vs run time:
+
+    -f, -F, -d and -B say where a privileged process reads and writes, so they
+    are refused when ssuspend is running from its setuid or setgid bit.  that
+    policy belongs to whoever installed it: the defaults above are compiled in,
+    and configure's --with-grep, --with-dd, --with-mkswap, --with-rmmod,
+    --with-modprobe, --with-before-script, --with-after-script and
+    --with-safe-path set them.  run as root, or build without the setuid bit,
+    and all four work normally -- which is how to test them.
+
+    -s and -m are allowed either way.  with the paths pinned they only write a
+    word to the control files above, and the kernel rejects any word it does
+    not know, so picking 'mem' instead of 'disk' stays available to everyone.
+
+    the programs ssuspend runs as root have no run time override at all, by
+    design: one would be an arbitrary-command-as-root option.
 $
 }}}

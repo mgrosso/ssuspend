@@ -91,6 +91,17 @@ fi
 AC_DEFINE_UNQUOTED([MODPROBE_PATH],["$ssuspend_modprobe"],
     [absolute path to modprobe])
 
+# The environment handed to those root helpers.  Compiled in for the same
+# reason their paths are: it decides what a privileged child inherits, so it
+# must not be settable by whoever invokes a setuid ssuspend.
+AC_ARG_WITH([safe-path],
+    [AS_HELP_STRING([--with-safe-path=PATH],
+        [PATH given to helpers run as root @<:@/sbin:/bin:/usr/sbin:/usr/bin@:>@])],
+    [ssuspend_safe_path="$withval"],
+    [ssuspend_safe_path="/sbin:/bin:/usr/sbin:/usr/bin"])
+AC_DEFINE_UNQUOTED([SAFE_PATH],["$ssuspend_safe_path"],
+    [PATH handed to helpers that run as root])
+
 # The before/after hooks are configuration, not installed programs, so they are
 # not autodetected.  Note these deliberately default to /etc and are NOT derived
 # from $sysconfdir, which would become $prefix/etc and silently relocate them.

@@ -63,7 +63,7 @@
 #include <syslog.h>
 
 static int argc_start=1;
-static char *short_options = "baf:s:t:d:pm:c:wB:DxXlvh?";
+static char *short_options = "baf:F:s:t:d:pm:c:wB:DxXlvh?";
 static int before=0;
 static int after=0;
 static int verbose=0;
@@ -84,6 +84,11 @@ char *power_disk_path=POWER_DISK_PATH ;
 char *disk_word=DISK_WORD ;
 char *device_path=NULL ;
 static int seconds = 30;
+//upper bound on -t.  generous: the point is to catch a typo or a deliberate
+//wedge, not to constrain real use.
+#ifndef MAX_SLEEP_SECONDS
+#define MAX_SLEEP_SECONDS 3600
+#endif
 
 //-c makes the whole suspend conditional on the battery, -w additionally waits
 //for that condition instead of giving up, and -B names the battery explicitly.
@@ -124,6 +129,7 @@ static struct option long_options [] = {
     { "time",1,NULL,'t'},
     { "device",1,NULL,'d'},
     { "disk",0,NULL,'p'},
+    { "disk-file",1,NULL,'F'},
     { "method",1,NULL,'m'},
     { "capacity",1,NULL,'c'},
     { "wait",0,NULL,'w'},
@@ -167,23 +173,29 @@ static char *safe_env[2] = { "PATH=" SAFE_PATH, NULL };
 #ifndef GREP_PATH
 #define GREP_PATH "/bin/grep"
 #endif
-static char  * grepmod_args[6] = { GREP_PATH,"-w","-q",NULL,"/proc/modules",NULL };
+//the "--" in the vectors below matters: module names come straight from argv,
+//so without it a module called "-f" is parsed as an option by the helper.
+//grep in particular then reads /proc/modules as a pattern file and blocks on
+//stdin, wedging the POWER_STATE_PATH lock until it is killed.  dd is left
+//alone because it takes key=value operands rather than getopt options, and its
+//substituted argument always starts with "of=".
+static char  * grepmod_args[7] = { GREP_PATH,"-w","-q","--",NULL,"/proc/modules",NULL };
 static const char *grep = GREP_PATH ;
-#define GREPMOD_ARG 3
+#define GREPMOD_ARG 4
 
 #ifndef RMMOD_PATH
 #define RMMOD_PATH "/sbin/rmmod"
 #endif
-static char  * rmmod_args[3] = { RMMOD_PATH,NULL,NULL };
+static char  * rmmod_args[4] = { RMMOD_PATH,"--",NULL,NULL };
 static const char * rmmod = RMMOD_PATH ;
-#define RMMOD_ARG 1
+#define RMMOD_ARG 2
 
 #ifndef MODPROBE_PATH
 #define MODPROBE_PATH "/sbin/modprobe"
 #endif
-static char  * modprobe_args[3] = { MODPROBE_PATH,NULL,NULL };
+static char  * modprobe_args[4] = { MODPROBE_PATH,"--",NULL,NULL };
 static const char * modprobe = MODPROBE_PATH ;
-#define MODPROBE_ARG 1
+#define MODPROBE_ARG 2
 
 #ifndef DD_PATH
 #define DD_PATH "/bin/dd"
@@ -195,9 +207,9 @@ static const char * dd = DD_PATH;
 #ifndef MKSWAP_PATH
 #define MKSWAP_PATH "/sbin/mkswap"
 #endif
-static char  * mkswap_args[5] = { MKSWAP_PATH,"-L","ssuspend",NULL,NULL };
+static char  * mkswap_args[6] = { MKSWAP_PATH,"-L","ssuspend","--",NULL,NULL };
 static const char * mkswap = MKSWAP_PATH;
-#define MKSWAP_ARG 3
+#define MKSWAP_ARG 4
 
 #ifndef PRESHELL_PATH
 #define PRESHELL_PATH "/etc/ssuspend/before"
@@ -737,6 +749,8 @@ static void usage(){
 "    -p  or --disk                       write the hibernation method to /sys/power/disk before suspending.\n"
 "                                        newer kernels require this before they will accept 'disk' on\n"
 "                                        /sys/power/state.\n"
+"    -F  <file> or --disk-file <file>    where to write the method. defaults to " POWER_DISK_PATH ".\n"
+"                                        implies -p.\n"
 "    -m  <method> or --method <method>   which method to write to /sys/power/disk. defaults to 'platform'.\n"
 "                                        implies -p.\n"
 "    -c  <pct> or --capacity <pct>       only suspend if the battery is " DISCHARGING_WORD " and its\n"
@@ -764,6 +778,23 @@ static void usage(){
 "    -v  or --verbose                    tells ssuspend to write status information to standard error.\n"
 "    -D  or --dryrun                     causes ssuspend to print out what it would do to stderr.\n"
 "                                        implies verbose.\n"
+"\n"
+"   build time vs run time:\n"
+"\n"
+"    -f, -F, -d and -B say where a privileged process reads and writes, so they\n"
+"    are refused when ssuspend is running from its setuid or setgid bit.  that\n"
+"    policy belongs to whoever installed it: the defaults above are compiled in,\n"
+"    and configure's --with-grep, --with-dd, --with-mkswap, --with-rmmod,\n"
+"    --with-modprobe, --with-before-script, --with-after-script and\n"
+"    --with-safe-path set them.  run as root, or build without the setuid bit,\n"
+"    and all four work normally -- which is how to test them.\n"
+"\n"
+"    -s and -m are allowed either way.  with the paths pinned they only write a\n"
+"    word to the control files above, and the kernel rejects any word it does\n"
+"    not know, so picking 'mem' instead of 'disk' stays available to everyone.\n"
+"\n"
+"    the programs ssuspend runs as root have no run time override at all, by\n"
+"    design: one would be an arbitrary-command-as-root option.\n"
 "\n", argvzero
    );
     exit(1);
@@ -781,6 +812,40 @@ static void strdup_option( char **dest ){
     if(*dest == NULL ){
         puke("could not allocate memory to copy option string.");
     }
+}
+
+//true when our privileges came from this binary's setuid/setgid bits rather
+//than from the caller already holding them.  root by login or by sudo gives
+//uid==euid, so it reads as not elevated and keeps full control.
+//
+//computed on each call rather than cached, so it cannot be read before it is
+//initialised.  both are cheap.
+static int running_elevated(){
+    return ( getuid() != geteuid() ) || ( getgid() != getegid() );
+}
+
+//-f, -F, -d and -B say WHERE a privileged process reads and writes.  That is
+//policy, fixed at install time by whoever set the setuid bit, and not a
+//parameter for the caller to pick: -f alone is enough to truncate any existing
+//file and fill it with whatever -s says.  So they are refused outright when we
+//are elevated, rather than quietly ignored, which would leave the caller
+//thinking the option took effect.
+//
+//-s and -m stay available on purpose.  With the paths pinned they only write a
+//word to the compiled-in sysfs control files, where the kernel rejects
+//anything it does not recognise, so choosing "mem" instead of "disk" from a
+//window manager keybinding stays possible.
+static void policy_option( char **dest, const char *optname ){
+    if( running_elevated() ){
+        fprintf(stderr,
+            "%s: %s is not allowed when running setuid or setgid.\n"
+            "%s: it redirects where a root process reads or writes, which is set\n"
+            "%s: at build time.  run as root, or use a build without the setuid\n"
+            "%s: bit, if you need to change it.\n",
+            argvzero, optname, argvzero, argvzero, argvzero);
+        exit(1);
+    }
+    strdup_option(dest);
 }
 
 static int do_sleep(){
@@ -824,7 +889,11 @@ static void handle_options( int argc, char **argv ){
             after=1;
             break;
         case 'f':
-            strdup_option(&power_state_path);
+            policy_option(&power_state_path,"-f");
+            break;
+        case 'F':
+            policy_option(&power_disk_path,"-F");
+            do_disk=1;
             break;
         case 's':
             strdup_option(&state_word);
@@ -833,7 +902,7 @@ static void handle_options( int argc, char **argv ){
             seconds=atoi(optarg);
             break;
         case 'd':
-            strdup_option(&device_path);
+            policy_option(&device_path,"-d");
             break;
         case 'p':
             do_disk=1;
@@ -850,7 +919,7 @@ static void handle_options( int argc, char **argv ){
             do_wait=1;
             break;
         case 'B':
-            strdup_option(&battery_path);
+            policy_option(&battery_path,"-B");
             break;
         case 'D':
             dryrun = 1;
@@ -884,12 +953,23 @@ static void handle_options( int argc, char **argv ){
                 argvzero, capacity_threshold);
         usage();
     }
+    //an absurd -t is a denial of service rather than a mistake: the lock on
+    //POWER_STATE_PATH is held for the whole sleep, so every later ssuspend
+    //fails until this one finishes.  do_sleep() already refuses <= 0.
+    if( seconds > MAX_SLEEP_SECONDS ){
+        fprintf(stderr,"%s: -t takes at most %i seconds, not (%i).\n",
+                argvzero, MAX_SLEEP_SECONDS, seconds);
+        usage();
+    }
 }
 
 int main(int argc, char **argv ){
     argvzero = argv[0];
     handle_options(argc, argv );
     opensyslog();
+    verbose_log("%s: uid=%i euid=%i gid=%i egid=%i%s", argvzero,
+            (int)getuid(), (int)geteuid(), (int)getgid(), (int)getegid(),
+            running_elevated() ? " (elevated: -f, -F, -d and -B are refused)" : "");
     //before lock_x() and lock_file() on purpose, see battery_ready().
     if(!battery_ready()){
         return 0;
