@@ -132,16 +132,19 @@ your X session.
 I personally use this with fvwm using the following lines...
 
 ```text
-AddToFunc Suspend       "I" Exec exec sudo /usr/local/sbin/ssuspend -Xvlp --method suspend
+AddToFunc SuspendToRam       "I" Exec exec /usr/local/sbin/ssuspend -Xvlp --method suspend
+AddToFunc Hibernate       "I" Exec exec /usr/local/sbin/ssuspend -Xvlp 
 ```
 
 and
 
 ```text
-Key BackSpace     A   MC  Suspend
+Key BackSpace     A   MC  SuspendToRam
+Key BackSpace     A   SC  Hibernate
+
 ```
 
-so that the laptop sleeps whenever alt-control-end is pressed. I haven't had to work around any misbehaving modules or device tree entries in quite some time so I haven't used the -a, -b, and module args in a number of years.
+so that the laptop sleeps to RAM or disk depending on the key combination. Note that the `--method suspend` of SuspendToRam means that state is still written to the encrypted swap such that if the laptop resumes after the battery has drained it will be the same as if Hibernate had been selected in that the encrypted state will used once the hard drive is unlocked from the initrd. I haven't had to work around any misbehaving modules or device tree entries in quite some time so I haven't used the -a, -b, and module args in a number of years.
 
 ### Suspending on low battery
 
