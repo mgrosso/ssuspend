@@ -40,20 +40,20 @@ autoreconf -i
 make
 ```
 
-A release tarball already contains ./configure, so there the first step is
-unnecessary.
+A release tarball would already contain ./configure, making the first step
+unnecessary, but we do not distribute those.
 
 configure finds the helper programs ssuspend runs, and compiles their absolute
-paths in.  Override any of them if it guesses wrong:
+paths in.  You may wverride any of them:
 
 ```sh
 ./configure --with-grep=/usr/bin/grep --with-mkswap=/usr/sbin/mkswap
 ```
 
 --with-dd, --with-rmmod and --with-modprobe work the same way, and
---with-before-script / --with-after-script move the optional /etc/ssuspend
-hooks.  A tool that is not found is only a warning, not an error: a built-in
-default is used instead.
+--with-before-script / --with-after-script move the optional
+/etc/ssuspend/before and ../after hooks.  If a tool is not found on the path
+at configure time a built-in default is used instead.
 
 ### Install
 
@@ -68,16 +68,17 @@ chmod u+s /usr/local/sbin/ssuspend
 ```
 
 or leave it unprivileged and call it through sudo, as the fvwm example below
-does.  Both work, but they are not equally safe -- see below.
+does.  Both work, but configuring /etc/sudoers securely for ssuspend is much
+more difficult than just using setuid. See below.
 
 ### What a caller may and may not change
 
-ssuspend splits its inputs in two.
+ssuspend splits its configuration into three groups of parameters.
 
-Policy is what a privileged process is allowed to touch: which files it reads
-and writes, which programs it runs, and what environment those programs get.
-That belongs to whoever installs the binary and sets the setuid bit, so it is
-compiled in.  configure sets it:
+Hard coded policy is what a privileged process is allowed to touch: which files
+it reads and writes, which programs it runs, and what environment those
+programs get. That belongs to whoever installs the binary and sets the setuid
+bit, so it is compiled in.  Configure hard codes these into the binary:
 
 ```text
 --with-grep=          --with-dd=             --with-mkswap=
@@ -85,44 +86,45 @@ compiled in.  configure sets it:
 --with-before-script= --with-after-script=   --with-power-supply-path=
 ```
 
-The programs run as root have no run time override at all, deliberately: such
-an option would be an arbitrary-command-as-root switch.
+These are executed as root so they musn't have run time overrides as that would
+allow ordinary users to run any command as root.
 
-Parameters are how one invocation behaves, and the caller picks them freely:
+User safe parameters change behavior without introducing new commands or paths:
 -t, -c, -w, -W, -p, -x, -X, -b, -a, -v, -l, -D.  They change timing and which
-steps run, never what a privileged process touches, so none of them is gated.
+steps run, never what a privileged process touches, so these can all be used
+even when privilege is escalated by the setuid bit.
 
-Note the `--with-` options set policy only.  Plain defaults such as the -t
-sleep and the -W interval are compile-time constants with no configure knob,
-because they are parameters: a caller may already change them at run time.
+Some paths can be modified with arguments in order to enable testing as an
+ordinary user and to give the root user more flexibility, but those
+arguments are not allowed if privilege has been escalated through the use of
+setuid or setgid. `-f` and `-F` name the control files written to, `-d`
+names a swap device wiped and rebuilt, `-B` names a battery directory read, and
+`-S` names the directory searched for one.  Each changes where a root process
+reads or writes so all are denied when ssuspend is running from its setuid or
+setgid bit.
 
-Five options sit in between.  -f and -F name the control files written to, -d
-names a swap device wiped and rebuilt, -B names a battery directory read, and
--S names the directory searched for one.  Each redirects where a root process
-reads or writes -- -f on its own is enough to truncate any existing file and
-refill it with whatever -s says -- so all five are refused outright when
-ssuspend is running from its setuid or setgid bit.  Run it as root, or build it
-without the setuid bit, and they work normally.  That is how to test them: a
-non-setuid build behaves exactly like the installed one except that these five
-are permitted.
+`-s` and `-m` do change which word is written to a `/sys/` path but they are
+allowed even for setuid and setgid so that users can choose how to suspend;
+in the setuid case the `/sys/` paths are hard coded and the Linux kernel is
+trusted to reject invalid inputs.
 
--s and -m are allowed either way.  With the paths pinned they only write a word
-to the compiled-in control files, where the kernel rejects anything it does not
-recognise, so choosing "mem" instead of "disk" stays available to everyone.
-
-The check is uid != euid (or gid != egid), which asks whether this binary
-granted the privilege or the caller already had it.
+The setuid/gid check is uid != euid (or gid != egid), which asks whether this
+binary granted the privilege or the caller already had it.
 
 ### Why setuid is safer than sudo here
 
-That check cannot help under sudo.  "sudo ssuspend" runs with real uid 0, so it
-looks like genuine root and -f, -F, -d, -B and -S are all permitted.  If sudoers
-grants ssuspend to anyone you would not hand a root shell to, you have to
-restrict the arguments in sudoers as well, which is easy to get wrong.
+The `uid != euid` check cannot help under sudo.  "sudo ssuspend" runs with real
+uid 0, so it looks like genuine root and -f, -F, -d, -B and -S are all
+permitted.  If sudoers grants ssuspend to anyone you would not hand a root
+shell to, you have to restrict the arguments in sudoers as well, which is easy
+to get wrong.
 
-Setuid has no such gap, so prefer it unless you have a reason not to.  Either
-way, every helper ssuspend runs as root comes from a compiled-in absolute path
-and gets a clean environment, so a hostile $PATH cannot redirect them.  The one
+Setuid doesn't have those pitfalls and is how I use ssuspend.
+
+### PATH and screensavers
+
+Every helper ssuspend runs as root comes from a compiled-in absolute path
+and gets a clean environment, so a hostile $PATH can't redirect them.  The one
 exception is the screen locker from -x and -X, which is deliberately run with
 your own privileges and found on your own $PATH, since it only needs to talk to
 your X session.
@@ -149,19 +151,19 @@ so that the laptop sleeps to RAM or disk depending on the key combination. Note 
 ### Suspending on low battery
 
 ssuspend can make the suspend conditional on the battery itself, which removes
-the need for an acpid battery handler entirely:
+the need for an acpid battery handler entirely with a simple cron job:
 
 ```sh
-ssuspend -p -X -c 10 iwl3945
+ssuspend -p -X -c 7 iwl3945
 ```
 
-suspends only if the battery is Discharging and below 10 percent, and exits 0
+suspends only if the battery is Discharging and below 7 percent, and exits 0
 without doing anything otherwise.  Adding -w makes it wait rather than give up,
 rechecking every 60 seconds -- or every -W seconds -- until the condition is
 met:
 
 ```sh
-ssuspend -p -X -c 10 -w iwl3945
+ssuspend -p -X -c 7 -w iwl3945
 ```
 
 That second form is meant to be started once from your session and left
